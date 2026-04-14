@@ -20,6 +20,8 @@
             id="dashboard"
             class="grid"
             data-api-path="{{ api_latest_path }}"
+            data-led-command-path="{{ api_led_command_path }}"
+            data-temperature-test-path="{{ api_temperature_test_path }}"
             data-refresh-ms="{{ frontend_refresh_ms }}"
         >
             <article class="card">
@@ -41,6 +43,26 @@
                 <h2>Temperature</h2>
                 <p id="temperature" class="value">-- °C</p>
             </article>
+        </section>
+
+        <section class="card controls">
+            <h2>Device Commands</h2>
+            <p>Send LED command to topic cvut/nsi/2026/ctu5/led.</p>
+            <div class="button-row">
+                <button id="led-on" class="action-button">LED ON</button>
+                <button id="led-off" class="action-button">LED OFF</button>
+                <button id="led-toggle" class="action-button">LED TOGGLE</button>
+            </div>
+
+            <h2>Telemetry Test</h2>
+            <p>Send temperature 100 °C as another device to cvut/nsi/2026/ctu5/telemetry.</p>
+            <div class="button-row">
+                <button id="send-temperature-test" class="action-button action-button-secondary">
+                    Send Test Telemetry (100 °C)
+                </button>
+            </div>
+
+            <p id="command-status" class="command-status">No command sent yet.</p>
         </section>
     </main>
 

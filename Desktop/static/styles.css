@@ -58,6 +58,50 @@ body {
     color: var(--text-muted);
 }
 
+.controls {
+    margin-top: 1rem;
+}
+
+.controls p {
+    margin: 0 0 0.8rem;
+    color: var(--text-muted);
+}
+
+.button-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.6rem;
+    margin-bottom: 1rem;
+}
+
+.action-button {
+    border: none;
+    border-radius: 10px;
+    padding: 0.65rem 1rem;
+    background: var(--accent);
+    color: #ffffff;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.action-button:hover {
+    opacity: 0.92;
+}
+
+.action-button-secondary {
+    background: #0f172a;
+}
+
+.command-status {
+    margin: 0;
+    font-weight: 600;
+    color: #0f172a;
+}
+
+.command-status.error {
+    color: #b91c1c;
+}
+
 .value {
     margin: 0;
     font-size: 1.4rem;

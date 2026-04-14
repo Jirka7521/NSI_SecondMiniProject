@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Any
 
 from dotenv import load_dotenv
-from flask import Flask, jsonify, render_template
+from flask import Flask, jsonify, render_template, request
 from paho.mqtt import client as mqtt_client
 
 
@@ -35,6 +35,23 @@ ENV_FILE_PATH = BASE_DIR / ".env"
 # Load the .env file before reading any environment variables.
 load_dotenv(ENV_FILE_PATH)
 
+
+def get_required_env(name: str) -> str:
+    """Return environment variable value or fail fast with clear message."""
+    value = os.environ.get(name)
+    if value is None or not value.strip():
+        raise RuntimeError(f"Missing required environment variable: {name}")
+    return value.strip()
+
+
+def get_required_int_env(name: str) -> int:
+    """Parse required integer environment variable or fail fast."""
+    raw_value = get_required_env(name)
+    try:
+        return int(raw_value)
+    except ValueError as exc:
+        raise RuntimeError(f"Environment variable {name} must be integer, got: {raw_value}") from exc
+
 # Flask server settings.
 FLASK_HOST = os.environ.get("FLASK_HOST", "127.0.0.1")
 FLASK_PORT = int(os.environ.get("FLASK_PORT", "5000"))
@@ -43,14 +60,15 @@ FLASK_DEBUG = os.environ.get("FLASK_DEBUG", "true").lower() == "true"
 # MQTT connection settings.
 # This project intentionally uses plain MQTT without authentication/TLS,
 # because the requirement is local/simple broker usage only.
-MQTT_BROKER_HOST = os.environ.get("MQTT_BROKER_HOST", "localhost")
-MQTT_BROKER_PORT = int(os.environ.get("MQTT_BROKER_PORT", "1883"))
-MQTT_KEEPALIVE_SECONDS = int(os.environ.get("MQTT_KEEPALIVE_SECONDS", "60"))
-MQTT_TOPIC_FILTER = os.environ.get("MQTT_TOPIC_FILTER")
+MQTT_BROKER_HOST = get_required_env("MQTT_BROKER_HOST")
+MQTT_BROKER_PORT = get_required_int_env("MQTT_BROKER_PORT")
+MQTT_KEEPALIVE_SECONDS = get_required_int_env("MQTT_KEEPALIVE_SECONDS")
+MQTT_TOPIC_FILTER = get_required_env("MQTT_TOPIC_FILTER")
+MQTT_LED_COMMAND_TOPIC = get_required_env("MQTT_LED_COMMAND_TOPIC")
+MQTT_TELEMETRY_TOPIC = get_required_env("MQTT_TELEMETRY_TOPIC")
 
-if MQTT_TOPIC_FILTER is None:
-    print("[Config] WARNING: MQTT_TOPIC_FILTER not set in .env; defaulting to '#' (subscribe all).")
-    MQTT_TOPIC_FILTER = "#"
+# We intentionally identify test telemetry as a separate producer.
+DESKTOP_TEST_DEVICE_ID = os.environ.get("DESKTOP_TEST_DEVICE_ID", "desktop-telemetry-tester")
 
 # Frontend polling interval in milliseconds.
 FRONTEND_REFRESH_MS = int(os.environ.get("FRONTEND_REFRESH_MS", "2000"))
@@ -58,6 +76,10 @@ FRONTEND_REFRESH_MS = int(os.environ.get("FRONTEND_REFRESH_MS", "2000"))
 # API route constants.
 ROUTE_DASHBOARD = "/"
 ROUTE_LATEST = "/api/latest"
+ROUTE_LED_COMMAND = "/api/commands/led"
+ROUTE_TEMPERATURE_TEST = "/api/commands/test-temperature"
+
+ALLOWED_LED_COMMANDS = {"ON", "OFF", "TOGGLE"}
 
 
 # -----------------------------------------------------------------------------
@@ -82,6 +104,7 @@ latest_data: dict[str, Any] = {
 # -----------------------------------------------------------------------------
 
 app = Flask(__name__)
+mqtt_subscriber_client: mqtt_client.Client | None = None
 
 
 def build_measurement_timestamp(value_from_payload: Any) -> str:
@@ -103,7 +126,7 @@ def build_measurement_timestamp(value_from_payload: Any) -> str:
     return datetime.now(tz=timezone.utc).isoformat()
 
 
-def update_latest_data_from_payload(payload_dict: dict[str, Any], raw_payload: str) -> None:
+def update_latest_data_from_payload(payload_dict: dict[str, Any]) -> None:
     """
     Normalize MQTT payload fields into a stable frontend shape.
 
@@ -142,7 +165,7 @@ def update_latest_data_from_payload(payload_dict: dict[str, Any], raw_payload: s
 def on_mqtt_connect(client: mqtt_client.Client, userdata: Any, flags: Any, reason_code: int, properties: Any = None) -> None:
     """Subscribe to MQTT topic filter after successful broker connection."""
     if reason_code == 0:
-        # Subscribe to all broker topics by default ("#") and keep only
+        # Subscribe to configured topic filter and keep only
         # the most recently received message in memory.
         client.subscribe(MQTT_TOPIC_FILTER)
         print(f"[MQTT] Connected. Subscribed to topic filter: {MQTT_TOPIC_FILTER}")
@@ -157,15 +180,15 @@ def on_mqtt_message(client: mqtt_client.Client, userdata: Any, message: mqtt_cli
     try:
         payload_dict = json.loads(raw_payload)
         if isinstance(payload_dict, dict):
-            update_latest_data_from_payload(payload_dict, raw_payload)
+            update_latest_data_from_payload(payload_dict)
         else:
             print("[MQTT] Ignored non-dictionary JSON payload.")
     except json.JSONDecodeError:
         print("[MQTT] Ignored invalid JSON payload.")
 
 
-def build_mqtt_client() -> mqtt_client.Client:
-    """Create, configure, and return MQTT client instance."""
+def build_mqtt_subscriber_client() -> mqtt_client.Client:
+    """Create and configure MQTT client used for telemetry subscription."""
     # Empty client_id lets broker assign/generated handling when supported,
     # which is fine because this dashboard has only one data source/device.
     client = mqtt_client.Client(mqtt_client.CallbackAPIVersion.VERSION2)
@@ -175,17 +198,38 @@ def build_mqtt_client() -> mqtt_client.Client:
     return client
 
 
+def build_mqtt_publisher_client() -> mqtt_client.Client:
+    """Create MQTT client used for one-shot publish requests from dashboard."""
+    return mqtt_client.Client(mqtt_client.CallbackAPIVersion.VERSION2)
+
+
+def publish_mqtt_payload(topic: str, payload: str) -> None:
+    """Publish text payload to topic and raise RuntimeError on failure."""
+    publisher = build_mqtt_publisher_client()
+
+    try:
+        publisher.connect(MQTT_BROKER_HOST, MQTT_BROKER_PORT, MQTT_KEEPALIVE_SECONDS)
+        result_info = publisher.publish(topic, payload)
+        result_info.wait_for_publish(timeout=2.0)
+
+        if result_info.rc != mqtt_client.MQTT_ERR_SUCCESS:
+            raise RuntimeError(f"MQTT publish failed with rc={result_info.rc}")
+    finally:
+        publisher.disconnect()
+
+
 def start_mqtt_background_loop() -> None:
     """
     Connect to broker and keep MQTT network loop running in background thread.
 
     If connection fails, Flask still starts, so frontend remains available.
     """
-    mqtt = build_mqtt_client()
+    global mqtt_subscriber_client
+    mqtt_subscriber_client = build_mqtt_subscriber_client()
 
     try:
-        mqtt.connect(MQTT_BROKER_HOST, MQTT_BROKER_PORT, MQTT_KEEPALIVE_SECONDS)
-        mqtt.loop_start()
+        mqtt_subscriber_client.connect(MQTT_BROKER_HOST, MQTT_BROKER_PORT, MQTT_KEEPALIVE_SECONDS)
+        mqtt_subscriber_client.loop_start()
         print(f"[MQTT] Trying broker {MQTT_BROKER_HOST}:{MQTT_BROKER_PORT}")
     except Exception as exc:  # noqa: BLE001
         print(f"[MQTT] Could not connect: {exc}")
@@ -201,6 +245,8 @@ def dashboard() -> str:
     return render_template(
         "index.html",
         api_latest_path=ROUTE_LATEST,
+        api_led_command_path=ROUTE_LED_COMMAND,
+        api_temperature_test_path=ROUTE_TEMPERATURE_TEST,
         frontend_refresh_ms=FRONTEND_REFRESH_MS,
     )
 
@@ -212,6 +258,53 @@ def get_latest_data() -> Any:
         snapshot = dict(latest_data)
 
     return jsonify(snapshot)
+
+
+@app.post(ROUTE_LED_COMMAND)
+def send_led_command() -> Any:
+    """Send ON/OFF/TOGGLE command to LED MQTT topic."""
+    payload = request.get_json(silent=True) or {}
+    command = str(payload.get("command", "")).strip().upper()
+
+    if command not in ALLOWED_LED_COMMANDS:
+        return jsonify(
+            {
+                "status": "error",
+                "message": f"Unsupported LED command. Allowed: {sorted(ALLOWED_LED_COMMANDS)}",
+            }
+        ), 400
+
+    try:
+        publish_mqtt_payload(MQTT_LED_COMMAND_TOPIC, command)
+    except Exception as exc:  # noqa: BLE001
+        return jsonify({"status": "error", "message": f"Publish failed: {exc}"}), 502
+
+    return jsonify({"status": "sent", "topic": MQTT_LED_COMMAND_TOPIC, "command": command})
+
+
+@app.post(ROUTE_TEMPERATURE_TEST)
+def send_temperature_test() -> Any:
+    """Publish simulated telemetry from desktop test device with 100 C value."""
+    telemetry_payload = {
+        "date": datetime.now(tz=timezone.utc).isoformat(),
+        "runtime": 0,
+        "ledstatus": "unknown",
+        "temperature": 100,
+        "device": DESKTOP_TEST_DEVICE_ID,
+    }
+
+    try:
+        publish_mqtt_payload(MQTT_TELEMETRY_TOPIC, json.dumps(telemetry_payload))
+    except Exception as exc:  # noqa: BLE001
+        return jsonify({"status": "error", "message": f"Publish failed: {exc}"}), 502
+
+    return jsonify(
+        {
+            "status": "sent",
+            "topic": MQTT_TELEMETRY_TOPIC,
+            "payload": telemetry_payload,
+        }
+    )
 
 
 if __name__ == "__main__":

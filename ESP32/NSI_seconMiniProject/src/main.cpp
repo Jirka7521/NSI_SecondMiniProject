@@ -18,18 +18,61 @@ MQTTClient mqttClient(1024);
 // Runtime state
 // ============================================================================
 unsigned long lastPublishMs = 0;
+unsigned long publishIntervalMs = PUBLISH_INTERVAL_MS;
 bool ledIsOn = false;
+
+// Board LED on GPIO4 is wired as active-low: LOW = ON, HIGH = OFF.
+static constexpr bool LED_ACTIVE_LOW = true;
+// NOTE: health-status LED indicator removed (manual MQTT commands control the LED)
+
+// ============================================================================
+// MQTT topic map
+// ============================================================================
+static constexpr char MQTT_TOPIC_LED_COMMAND[] = "cvut/nsi/2026/ctu5/led";
+static constexpr char MQTT_TOPIC_PERIOD_COMMAND[] = "cvut/nsi/2026/ctu5/period";
+static constexpr char MQTT_TOPIC_TELEMETRY_WILDCARD[] = "cvut/nsi/2026/+/telemetry";
+
+// Warning indication: 3 blinks with exact 100 ms period (50 ms ON + 50 ms OFF).
+static constexpr uint8_t WARNING_BLINK_COUNT = 3;
+static constexpr unsigned long WARNING_BLINK_PERIOD_MS = 100UL;
 
 // ============================================================================
 // Utility helpers
 // ============================================================================
 void setLed(bool on) {
   ledIsOn = on;
-  digitalWrite(LED_PIN, on ? HIGH : LOW);
+  if (LED_ACTIVE_LOW) {
+    digitalWrite(LED_PIN, on ? LOW : HIGH);
+  } else {
+    digitalWrite(LED_PIN, on ? HIGH : LOW);
+  }
 }
 
 const char *ledStatusText() {
   return ledIsOn ? "on" : "off";
+}
+
+bool startsWithPrefix(const String &value, const char *prefix) {
+  return value.startsWith(prefix);
+}
+
+bool endsWithSuffix(const String &value, const char *suffix) {
+  int valueLength = value.length();
+  int suffixLength = strlen(suffix);
+  if (valueLength < suffixLength) {
+    return false;
+  }
+
+  return value.substring(valueLength - suffixLength).equals(suffix);
+}
+
+bool isTelemetryTopic(const String &topic) {
+  return startsWithPrefix(topic, "cvut/nsi/2026/") && endsWithSuffix(topic, "/telemetry");
+}
+
+bool isForeignTelemetryTopic(const String &topic) {
+  // Consider any telemetry topic as candidate; actual origin check is done by payload's "device" field.
+  return isTelemetryTopic(topic);
 }
 
 bool isClockSynced() {
@@ -44,6 +87,229 @@ String utcTimestampNow() {
   char iso8601[25];
   strftime(iso8601, sizeof(iso8601), "%Y-%m-%dT%H:%M:%SZ", &tmUtc);
   return String(iso8601);
+}
+
+void runWarningBlinkSequence() {
+  Serial.println("[WARN] Starting warning blink sequence");
+  bool prevState = ledIsOn;
+
+  for (uint8_t i = 0; i < WARNING_BLINK_COUNT; ++i) {
+    setLed(true);
+    delay(WARNING_BLINK_PERIOD_MS / 2UL);
+    setLed(false);
+    delay(WARNING_BLINK_PERIOD_MS / 2UL);
+  }
+
+  // Restore previous LED state so user-controlled LED isn't lost
+  setLed(prevState);
+  Serial.print("[WARN] Warning blink sequence complete, restored LED state=");
+  Serial.println(ledStatusText());
+}
+
+bool parseTemperatureFromTelemetry(const String &payload, float &temperatureOut) {
+  JsonDocument doc;
+  DeserializationError error = deserializeJson(doc, payload);
+  if (error) {
+    return false;
+  }
+
+  if (!doc["temperature"].is<float>() && !doc["temperature"].is<int>()) {
+    return false;
+  }
+
+  temperatureOut = doc["temperature"].as<float>();
+  return true;
+}
+
+bool parsePublishPeriodMs(const String &payload, unsigned long &periodOut) {
+  String normalized = payload;
+  normalized.trim();
+  if (normalized.length() == 0) {
+    return false;
+  }
+
+  char *endPtr = nullptr;
+  unsigned long parsed = strtoul(normalized.c_str(), &endPtr, 10);
+  if (endPtr == normalized.c_str() || *endPtr != '\0' || parsed == 0UL) {
+    return false;
+  }
+
+  periodOut = parsed;
+  return true;
+}
+
+void handleLedCommand(const String &payload) {
+  Serial.print("[MQTT] handleLedCommand payload='");
+  Serial.print(payload);
+  Serial.println("'");
+
+  String command = payload;
+  command.trim();
+
+  // Try plain text values first
+  String upper = command;
+  upper.toUpperCase();
+
+  if (upper == "ON" || upper == "1" || upper == "TRUE") {
+    setLed(true);
+    Serial.println("[MQTT] LED command -> ON");
+    return;
+  }
+
+  if (upper == "OFF" || upper == "0" || upper == "FALSE") {
+    setLed(false);
+    Serial.println("[MQTT] LED command -> OFF");
+    return;
+  }
+
+  if (upper == "TOGGLE") {
+    setLed(!ledIsOn);
+    Serial.print("[MQTT] LED command -> TOGGLE, new state=");
+    Serial.println(ledStatusText());
+    return;
+  }
+
+  // If payload looks like JSON, try to extract a command field
+  if (command.startsWith("{") && command.endsWith("}")) {
+    DynamicJsonDocument doc(256);
+    DeserializationError err = deserializeJson(doc, command);
+    if (!err) {
+      if (doc.containsKey("command")) {
+        String cmd = doc["command"].as<String>();
+        cmd.trim();
+        cmd.toUpperCase();
+        if (cmd == "ON") { setLed(true); Serial.println("[MQTT] LED JSON command -> ON"); return; }
+        if (cmd == "OFF") { setLed(false); Serial.println("[MQTT] LED JSON command -> OFF"); return; }
+        if (cmd == "TOGGLE") { setLed(!ledIsOn); Serial.println("[MQTT] LED JSON command -> TOGGLE"); return; }
+      }
+
+      // also accept numeric or boolean fields
+      if (doc.containsKey("value")) {
+        if (doc["value"].is<bool>()) {
+          setLed(doc["value"].as<bool>());
+          Serial.println("[MQTT] LED JSON value -> boolean");
+          return;
+        }
+        if (doc["value"].is<int>()) {
+          setLed(doc["value"].as<int>() != 0);
+          Serial.println("[MQTT] LED JSON value -> int");
+          return;
+        }
+      }
+    }
+  }
+
+  Serial.print("[MQTT] Unsupported LED command/payload: ");
+  Serial.println(payload);
+}
+
+void handlePeriodCommand(const String &payload) {
+  Serial.print("[MQTT] handlePeriodCommand payload='");
+  Serial.print(payload);
+  Serial.println("'");
+
+  unsigned long newPeriodMs = 0;
+  if (!parsePublishPeriodMs(payload, newPeriodMs)) {
+    // Try JSON with field "period_ms" or "period"
+    if (payload.startsWith("{") && payload.endsWith("}")) {
+      DynamicJsonDocument doc(256);
+      DeserializationError err = deserializeJson(doc, payload);
+      if (!err) {
+        if (doc.containsKey("period_ms") || doc.containsKey("period")) {
+          unsigned long p = 0;
+          if (doc.containsKey("period_ms")) p = doc["period_ms"].as<unsigned long>();
+          else p = doc["period"].as<unsigned long>();
+          if (p > 0) {
+            publishIntervalMs = p;
+            Serial.print("[MQTT] Publish interval updated (json) to ");
+            Serial.print(publishIntervalMs);
+            Serial.println(" ms");
+            return;
+          }
+        }
+      }
+    }
+
+    Serial.print("[MQTT] Invalid period payload: ");
+    Serial.println(payload);
+    return;
+  }
+
+  publishIntervalMs = newPeriodMs;
+  Serial.print("[MQTT] Publish interval updated to ");
+  Serial.print(publishIntervalMs);
+  Serial.println(" ms");
+}
+
+void handleForeignTelemetry(const String &payload) {
+  Serial.print("[MQTT] handleForeignTelemetry payload='");
+  Serial.print(payload);
+  Serial.println("'");
+
+  DynamicJsonDocument doc(512);
+  DeserializationError err = deserializeJson(doc, payload);
+  if (err) {
+    Serial.println("[MQTT] Could not parse foreign telemetry JSON.");
+    return;
+  }
+
+  String originDevice = "";
+  if (doc.containsKey("device")) {
+    originDevice = doc["device"].as<String>();
+  }
+
+  if (originDevice.length() > 0 && originDevice == String(MQTT_CLIENT_ID)) {
+    Serial.println("[MQTT] Ignoring own telemetry message.");
+    return;
+  }
+
+  if (!doc.containsKey("temperature")) {
+    Serial.println("[MQTT] No temperature field in foreign telemetry.");
+    return;
+  }
+
+  float foreignTemperature = doc["temperature"].as<float>();
+  Serial.print("[MQTT] Foreign temperature = ");
+  Serial.println(foreignTemperature);
+
+  if (foreignTemperature > 30.0f) {
+    Serial.println("[WARN] Foreign telemetry above 30 C -> warning blink sequence.");
+    runWarningBlinkSequence();
+  }
+}
+
+void onMqttMessage(String &topic, String &payload) {
+  Serial.print("[MQTT] Received on ");
+  Serial.print(topic);
+  Serial.print(" -> ");
+  Serial.println(payload);
+
+  if (topic == MQTT_TOPIC_LED_COMMAND) {
+    handleLedCommand(payload);
+    return;
+  }
+
+  if (topic == MQTT_TOPIC_PERIOD_COMMAND) {
+    handlePeriodCommand(payload);
+    return;
+  }
+
+  if (isForeignTelemetryTopic(topic)) {
+    handleForeignTelemetry(payload);
+  }
+}
+
+void subscribeToMqttTopics() {
+  bool okLed = mqttClient.subscribe(MQTT_TOPIC_LED_COMMAND, 1);
+  bool okPeriod = mqttClient.subscribe(MQTT_TOPIC_PERIOD_COMMAND, 1);
+  bool okTelemetryWildcard = mqttClient.subscribe(MQTT_TOPIC_TELEMETRY_WILDCARD, 1);
+
+  Serial.print("[MQTT] Subscribe LED command: ");
+  Serial.println(okLed ? "OK" : "FAILED");
+  Serial.print("[MQTT] Subscribe period command: ");
+  Serial.println(okPeriod ? "OK" : "FAILED");
+  Serial.print("[MQTT] Subscribe wildcard telemetry: ");
+  Serial.println(okTelemetryWildcard ? "OK" : "FAILED");
 }
 
 // ============================================================================
@@ -100,6 +366,7 @@ void connectMqtt() {
   }
 
   mqttClient.begin(MQTT_HOST, MQTT_PORT, wifiClient);
+  mqttClient.onMessage(onMqttMessage);
   mqttClient.setKeepAlive(MQTT_KEEP_ALIVE_SECONDS);
   mqttClient.setTimeout(MQTT_SOCKET_TIMEOUT_MS);
   mqttClient.setWill(MQTT_TOPIC, "{\"status\":\"offline\"}", false, 1);
@@ -119,6 +386,7 @@ void connectMqtt() {
 
     if (connected) {
       Serial.println("[MQTT] Connected.");
+      subscribeToMqttTopics();
       return;
     }
 
@@ -134,8 +402,7 @@ void ensureConnectionsAndTime() {
   syncClockWithNtp();
   connectMqtt();
 
-  // LED reflects healthy online state.
-  setLed(WiFi.status() == WL_CONNECTED && mqttClient.connected() && isClockSynced());
+  // Health-status LED indicator removed: do not override LED here.
 }
 
 // ============================================================================
@@ -147,6 +414,7 @@ String createTelemetryPayload(float temperatureC) {
   doc["runtime"] = static_cast<unsigned long>(millis() / 1000UL);
   doc["ledstatus"] = ledStatusText();
   doc["temperature"] = temperatureC;
+  doc["device"] = MQTT_CLIENT_ID;
 
   String payload;
   serializeJson(doc, payload);
@@ -191,7 +459,7 @@ void loop() {
   mqttClient.loop();
 
   unsigned long now = millis();
-  if (now - lastPublishMs >= PUBLISH_INTERVAL_MS) {
+  if (now - lastPublishMs >= publishIntervalMs) {
     lastPublishMs = now;
     publishTelemetry();
   }
