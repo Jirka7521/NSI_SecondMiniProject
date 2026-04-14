@@ -18,11 +18,15 @@ const ledOnButton = document.getElementById("led-on");
 const ledOffButton = document.getElementById("led-off");
 const ledToggleButton = document.getElementById("led-toggle");
 const sendTemperatureTestButton = document.getElementById("send-temperature-test");
+const telemetryPeriodValueElement = document.getElementById("telemetry-period-value");
+const telemetryPeriodUnitElement = document.getElementById("telemetry-period-unit");
+const setTelemetryPeriodButton = document.getElementById("set-telemetry-period");
 const commandStatusElement = document.getElementById("command-status");
 
 const apiPath = dashboardElement.dataset.apiPath;
 const ledCommandPath = dashboardElement.dataset.ledCommandPath;
 const temperatureTestPath = dashboardElement.dataset.temperatureTestPath;
+const updatePeriodPath = dashboardElement.dataset.updatePeriodPath;
 const refreshMs = Number(dashboardElement.dataset.refreshMs || "2000");
 const TEMPERATURE_UNIT_COOKIE = "dashboard_temperature_unit";
 const TIMEZONE_COOKIE = "dashboard_time_zone";
@@ -226,6 +230,58 @@ async function sendTemperatureTest() {
     }
 }
 
+function toPeriodSeconds(rawValue, rawUnit) {
+    const numericValue = Number(rawValue);
+    if (!Number.isFinite(numericValue) || numericValue <= 0) {
+        return null;
+    }
+
+    if (rawUnit === "m") {
+        return Math.round(numericValue * 60);
+    }
+
+    return Math.round(numericValue);
+}
+
+async function sendTelemetryPeriodUpdate() {
+    if (!telemetryPeriodValueElement || !telemetryPeriodUnitElement) {
+        return;
+    }
+
+    const selectedUnit = telemetryPeriodUnitElement.value === "m" ? "m" : "s";
+    const inputValue = telemetryPeriodValueElement.value;
+    const periodSeconds = toPeriodSeconds(inputValue, selectedUnit);
+
+    if (periodSeconds === null) {
+        setCommandStatus("Telemetry period must be a positive number.", true);
+        return;
+    }
+
+    if (periodSeconds < 1 || periodSeconds > 300) {
+        setCommandStatus("Telemetry period must be between 1 second and 5 minutes.", true);
+        return;
+    }
+
+    const query = new URLSearchParams({ period: String(inputValue), unit: selectedUnit });
+    const requestPath = `${updatePeriodPath}?${query.toString()}`;
+
+    try {
+        const response = await fetch(requestPath, { method: "POST" });
+        const payload = await response.json();
+
+        if (!response.ok) {
+            throw new Error(payload.message || `Request failed: ${response.status}`);
+        }
+
+        setCommandStatus(
+            `Telemetry period updated: ${payload.period_seconds} s -> topic ${payload.topic}`
+        );
+    } catch (error) {
+        setCommandStatus(`Telemetry period update failed: ${error.message}`, true);
+        console.error(error);
+    }
+}
+
 async function loadLatestData() {
     try {
         const response = await fetch(apiPath, { cache: "no-store" });
@@ -256,6 +312,10 @@ if (ledToggleButton) {
 
 if (sendTemperatureTestButton) {
     sendTemperatureTestButton.addEventListener("click", sendTemperatureTest);
+}
+
+if (setTelemetryPeriodButton) {
+    setTelemetryPeriodButton.addEventListener("click", sendTelemetryPeriodUpdate);
 }
 
 if (temperatureUnitSelectElement) {

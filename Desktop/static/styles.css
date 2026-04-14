@@ -159,6 +159,32 @@ body {
     margin-bottom: 1rem;
 }
 
+.period-controls {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: end;
+    gap: 0.6rem;
+    margin-bottom: 1rem;
+}
+
+.period-field {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+    font-weight: 700;
+    color: var(--text-muted);
+}
+
+.period-field input,
+.period-field select {
+    border: 1px solid #94a3b8;
+    border-radius: 8px;
+    padding: 0.45rem 0.6rem;
+    font-size: 0.95rem;
+    background: #ffffff;
+    min-width: 130px;
+}
+
 .action-button {
     border: none;
     border-radius: 10px;

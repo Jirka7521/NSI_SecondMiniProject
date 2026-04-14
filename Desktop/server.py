@@ -67,6 +67,7 @@ MQTT_TOPIC_FILTER = get_required_env("MQTT_TOPIC_FILTER")
 MQTT_LED_COMMAND_TOPIC = get_required_env("MQTT_LED_COMMAND_TOPIC")
 MQTT_TELEMETRY_TOPIC = get_required_env("MQTT_TELEMETRY_TOPIC")
 MQTT_STATUS_TOPIC = get_required_env("MQTT_STATUS_TOPIC")
+MQTT_PERIOD_COMMAND_TOPIC = get_required_env("MQTT_PERIOD_COMMAND_TOPIC")
 
 # We intentionally identify test telemetry as a separate producer.
 DESKTOP_TEST_DEVICE_ID = os.environ.get("DESKTOP_TEST_DEVICE_ID", "desktop-telemetry-tester")
@@ -79,6 +80,10 @@ ROUTE_DASHBOARD = "/"
 ROUTE_LATEST = "/api/latest"
 ROUTE_LED_COMMAND = "/api/commands/led"
 ROUTE_TEMPERATURE_TEST = "/api/commands/test-temperature"
+ROUTE_UPDATE_TELEMETRY_PERIOD = "/update_telemetry_period"
+
+TELEMETRY_PERIOD_MIN_SECONDS = 1
+TELEMETRY_PERIOD_MAX_SECONDS = 300
 
 ALLOWED_LED_COMMANDS = {"ON", "OFF", "TOGGLE"}
 
@@ -274,6 +279,10 @@ def dashboard() -> str:
         api_latest_path=ROUTE_LATEST,
         api_led_command_path=ROUTE_LED_COMMAND,
         api_temperature_test_path=ROUTE_TEMPERATURE_TEST,
+        api_update_period_path=ROUTE_UPDATE_TELEMETRY_PERIOD,
+        mqtt_led_command_topic=MQTT_LED_COMMAND_TOPIC,
+        mqtt_telemetry_topic=MQTT_TELEMETRY_TOPIC,
+        mqtt_period_command_topic=MQTT_PERIOD_COMMAND_TOPIC,
         frontend_refresh_ms=FRONTEND_REFRESH_MS,
     )
 
@@ -330,6 +339,61 @@ def send_temperature_test() -> Any:
             "status": "sent",
             "topic": MQTT_TELEMETRY_TOPIC,
             "payload": telemetry_payload,
+        }
+    )
+
+
+@app.route(ROUTE_UPDATE_TELEMETRY_PERIOD, methods=["GET", "POST"])
+def update_telemetry_period() -> Any:
+    """
+    Update ESP32 telemetry period and publish value to MQTT as seconds.
+
+    Supported query params:
+    - period: numeric value
+    - unit: "s" (default) or "m"
+
+    Valid final range is 1..300 seconds.
+    """
+    raw_period = (request.args.get("period") or "").strip()
+    raw_unit = (request.args.get("unit") or "s").strip().lower()
+
+    if not raw_period:
+        return jsonify({"status": "error", "message": "Missing query parameter 'period'."}), 400
+
+    try:
+        period_value = float(raw_period)
+    except ValueError:
+        return jsonify({"status": "error", "message": f"Invalid period value: {raw_period}"}), 400
+
+    if period_value <= 0:
+        return jsonify({"status": "error", "message": "Period must be > 0."}), 400
+
+    if raw_unit not in {"s", "m"}:
+        return jsonify({"status": "error", "message": "Unsupported unit. Use 's' or 'm'."}), 400
+
+    period_seconds = int(round(period_value * 60.0)) if raw_unit == "m" else int(round(period_value))
+
+    if period_seconds < TELEMETRY_PERIOD_MIN_SECONDS or period_seconds > TELEMETRY_PERIOD_MAX_SECONDS:
+        return jsonify(
+            {
+                "status": "error",
+                "message": (
+                    "Period out of range. Allowed interval: "
+                    f"{TELEMETRY_PERIOD_MIN_SECONDS}..{TELEMETRY_PERIOD_MAX_SECONDS} seconds."
+                ),
+            }
+        ), 400
+
+    try:
+        publish_mqtt_payload(MQTT_PERIOD_COMMAND_TOPIC, str(period_seconds))
+    except Exception as exc:  # noqa: BLE001
+        return jsonify({"status": "error", "message": f"Publish failed: {exc}"}), 502
+
+    return jsonify(
+        {
+            "status": "sent",
+            "topic": MQTT_PERIOD_COMMAND_TOPIC,
+            "period_seconds": period_seconds,
         }
     )
 

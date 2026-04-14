@@ -110,7 +110,7 @@ bool parseTemperatureFromTelemetry(const String &payload, float &temperatureOut)
   return true;
 }
 
-bool parsePublishPeriodMs(const String &payload, unsigned long &periodOut) {
+bool parsePublishPeriodSeconds(const String &payload, unsigned long &periodOutSeconds) {
   String normalized = payload;
   normalized.trim();
   if (normalized.length() == 0) {
@@ -123,7 +123,7 @@ bool parsePublishPeriodMs(const String &payload, unsigned long &periodOut) {
     return false;
   }
 
-  periodOut = parsed;
+  periodOutSeconds = parsed;
   return true;
 }
 
@@ -197,37 +197,40 @@ void handlePeriodCommand(const String &payload) {
   Serial.print(payload);
   Serial.println("'");
 
-  unsigned long newPeriodMs = 0;
-  if (!parsePublishPeriodMs(payload, newPeriodMs)) {
-    // Try JSON with field "period_ms" or "period"
+  unsigned long newPeriodSeconds = 0;
+  if (!parsePublishPeriodSeconds(payload, newPeriodSeconds)) {
+    // Try JSON with field "period_seconds" or "period"
     if (payload.startsWith("{") && payload.endsWith("}")) {
       DynamicJsonDocument doc(256);
       DeserializationError err = deserializeJson(doc, payload);
       if (!err) {
-        if (doc.containsKey("period_ms") || doc.containsKey("period")) {
+        if (doc.containsKey("period_seconds") || doc.containsKey("period")) {
           unsigned long p = 0;
-          if (doc.containsKey("period_ms")) p = doc["period_ms"].as<unsigned long>();
+          if (doc.containsKey("period_seconds")) p = doc["period_seconds"].as<unsigned long>();
           else p = doc["period"].as<unsigned long>();
-          if (p > 0) {
-            publishIntervalMs = p;
-            Serial.print("[MQTT] Publish interval updated (json) to ");
-            Serial.print(publishIntervalMs);
-            Serial.println(" ms");
-            return;
-          }
+          newPeriodSeconds = p;
         }
       }
     }
+  }
 
-    Serial.print("[MQTT] Invalid period payload: ");
-    Serial.println(payload);
+  if (newPeriodSeconds < PUBLISH_PERIOD_MIN_SECONDS ||
+      newPeriodSeconds > PUBLISH_PERIOD_MAX_SECONDS) {
+    Serial.print("[MQTT] Invalid period seconds (allowed ");
+    Serial.print(PUBLISH_PERIOD_MIN_SECONDS);
+    Serial.print("..");
+    Serial.print(PUBLISH_PERIOD_MAX_SECONDS);
+    Serial.print("): ");
+    Serial.println(newPeriodSeconds);
     return;
   }
 
-  publishIntervalMs = newPeriodMs;
+  publishIntervalMs = newPeriodSeconds * 1000UL;
   Serial.print("[MQTT] Publish interval updated to ");
   Serial.print(publishIntervalMs);
-  Serial.println(" ms");
+  Serial.print(" ms (");
+  Serial.print(newPeriodSeconds);
+  Serial.println(" s)");
 }
 
 void handleForeignTelemetry(const String &payload) {

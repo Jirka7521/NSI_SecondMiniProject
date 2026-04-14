@@ -51,6 +51,8 @@ static constexpr uint8_t DHT_TYPE = DHT11;
 // Application timing
 // ============================================================================
 static constexpr unsigned long PUBLISH_INTERVAL_MS = 10000UL;
+static constexpr unsigned long PUBLISH_PERIOD_MIN_SECONDS = 1UL;
+static constexpr unsigned long PUBLISH_PERIOD_MAX_SECONDS = 300UL;
 static constexpr uint8_t WARNING_BLINK_COUNT = 3;
 static constexpr unsigned long WARNING_BLINK_PERIOD_MS = 100UL;
 static constexpr uint32_t SERIAL_BAUD_RATE = 115200;
