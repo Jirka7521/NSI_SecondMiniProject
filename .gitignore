@@ -1,0 +1,12 @@
+# Python virtual environment
+.venv/
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Local configuration files (keep only examples in git)
+Desktop/.env
+
+# Optional IDE files
+.vscode/

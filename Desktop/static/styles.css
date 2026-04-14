@@ -1,0 +1,75 @@
+:root {
+    --bg-start: #f8fafc;
+    --bg-end: #e2e8f0;
+    --surface: #ffffff;
+    --text-main: #1f2937;
+    --text-muted: #475569;
+    --accent: #0f766e;
+    --card-shadow: 0 14px 28px rgba(15, 23, 42, 0.1);
+}
+
+* {
+    box-sizing: border-box;
+}
+
+body {
+    margin: 0;
+    min-height: 100vh;
+    font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+    color: var(--text-main);
+    background: linear-gradient(130deg, var(--bg-start), var(--bg-end));
+}
+
+.layout {
+    width: min(1000px, 92vw);
+    margin: 2rem auto;
+}
+
+.header {
+    margin-bottom: 1.5rem;
+}
+
+.header h1 {
+    margin: 0 0 0.5rem;
+    color: var(--accent);
+}
+
+.header p {
+    margin: 0;
+    color: var(--text-muted);
+}
+
+.grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 1rem;
+}
+
+.card {
+    background: var(--surface);
+    border-radius: 14px;
+    padding: 1rem;
+    box-shadow: var(--card-shadow);
+}
+
+.card h2 {
+    margin: 0 0 0.7rem;
+    font-size: 1rem;
+    color: var(--text-muted);
+}
+
+.value {
+    margin: 0;
+    font-size: 1.4rem;
+    font-weight: 700;
+}
+
+@media (max-width: 600px) {
+    .layout {
+        margin: 1rem auto;
+    }
+
+    .value {
+        font-size: 1.2rem;
+    }
+}

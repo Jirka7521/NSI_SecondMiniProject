@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>MQTT Device Dashboard</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+</head>
+<body>
+    <main class="layout">
+        <header class="header">
+            <h1>Device Live Dashboard</h1>
+            <p>
+                Latest measurement from MQTT topic.
+                Data refreshes automatically.
+            </p>
+        </header>
+
+        <section
+            id="dashboard"
+            class="grid"
+            data-api-path="{{ api_latest_path }}"
+            data-refresh-ms="{{ frontend_refresh_ms }}"
+        >
+            <article class="card">
+                <h2>Measurement Date & Time</h2>
+                <p id="measurement-datetime" class="value">Waiting for data...</p>
+            </article>
+
+            <article class="card">
+                <h2>LED Status</h2>
+                <p id="led-status" class="value">unknown</p>
+            </article>
+
+            <article class="card">
+                <h2>Runtime</h2>
+                <p id="runtime" class="value">-- s</p>
+            </article>
+
+            <article class="card">
+                <h2>Temperature</h2>
+                <p id="temperature" class="value">-- °C</p>
+            </article>
+        </section>
+    </main>
+
+    <script src="{{ url_for('static', filename='dashboard.js') }}"></script>
+</body>
+</html>
