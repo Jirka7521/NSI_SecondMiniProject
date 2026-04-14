@@ -9,6 +9,9 @@
 
 // ============================================================================
 // Hardware and network clients
+// - `dht` communicates with the temperature sensor.
+// - `wifiClient` is used by the MQTT client to transport TCP.
+// - `mqttClient` holds the MQTT session and callbacks.
 // ============================================================================
 DHT dht(DHT_PIN, DHT_TYPE);
 WiFiClient wifiClient;
@@ -16,14 +19,17 @@ MQTTClient mqttClient(1024);
 
 // ============================================================================
 // Runtime state
+// Tracks timing, publish period and the LED state used by the program.
+// `publishIntervalMs` is configured from `PUBLISH_INTERVAL_MS` but can be
+// changed at runtime by MQTT period commands.
 // ============================================================================
 unsigned long lastPublishMs = 0;
 unsigned long publishIntervalMs = PUBLISH_INTERVAL_MS;
 bool ledIsOn = false;
 
 // Board LED on GPIO4 is wired as active-low: LOW = ON, HIGH = OFF.
+// The helper `setLed()` below centralizes active-low handling.
 static constexpr bool LED_ACTIVE_LOW = true;
-// NOTE: health-status LED indicator removed (manual MQTT commands control the LED)
 
 // ============================================================================
 // Utility helpers
@@ -56,7 +62,7 @@ bool endsWithSuffix(const String &value, const char *suffix) {
 }
 
 bool isTelemetryTopic(const String &topic) {
-  return startsWithPrefix(topic, "cvut/nsi/2026/") && endsWithSuffix(topic, "/telemetry");
+  return startsWithPrefix(topic, MQTT_TOPIC_PREFIX) && endsWithSuffix(topic, MQTT_TOPIC_TELEMETRY_SUFFIX);
 }
 
 bool isForeignTelemetryTopic(const String &topic) {
@@ -65,6 +71,9 @@ bool isForeignTelemetryTopic(const String &topic) {
 }
 
 bool isClockSynced() {
+  // We consider the clock synced if the Unix epoch is past a reasonable
+  // threshold (here ~1700000000). This avoids publishing timestamps like
+  // 1970-01-01 before NTP sync completes.
   return time(nullptr) > 1700000000;
 }
 
@@ -96,6 +105,8 @@ void runWarningBlinkSequence() {
 }
 
 bool parseTemperatureFromTelemetry(const String &payload, float &temperatureOut) {
+  // Parse a temperature value from a telemetry JSON payload.
+  // Accept both integer and float JSON types to be forgiving.
   JsonDocument doc;
   DeserializationError error = deserializeJson(doc, payload);
   if (error) {
@@ -144,14 +155,12 @@ void handleLedCommand(const String &payload) {
     Serial.println("[MQTT] LED command -> ON");
     return;
   }
-
-  if (upper == "OFF" || upper == "0" || upper == "FALSE") {
+  else if (upper == "OFF" || upper == "0" || upper == "FALSE") {
     setLed(false);
     Serial.println("[MQTT] LED command -> OFF");
     return;
   }
-
-  if (upper == "TOGGLE") {
+  else if (upper == "TOGGLE") {
     setLed(!ledIsOn);
     Serial.print("[MQTT] LED command -> TOGGLE, new state=");
     Serial.println(ledStatusText());
@@ -416,14 +425,18 @@ void ensureConnectionsAndTime() {
   connectWifi();
   syncClockWithNtp();
   connectMqtt();
-
-  // Health-status LED indicator removed: do not override LED here.
 }
 
 // ============================================================================
 // Telemetry payload
 // ============================================================================
 String createTelemetryPayload(float temperatureC) {
+  // Build a compact JSON object with current telemetry fields:
+  // - `date`: UTC ISO timestamp
+  // - `runtime`: seconds since boot
+  // - `ledstatus`: current LED state
+  // - `temperature`: float Celsius
+  // - `device`: client identifier
   JsonDocument doc;
   doc["date"] = utcTimestampNow();
   doc["runtime"] = static_cast<unsigned long>(millis() / 1000UL);
@@ -453,14 +466,14 @@ void publishTelemetry() {
   Serial.println(payload);
 }
 
-// ============================================================================
-// Arduino entry points
-// ============================================================================
 void setup() {
   Serial.begin(SERIAL_BAUD_RATE);
   delay(200);
 
   pinMode(LED_PIN, OUTPUT);
+  //Blik with LED to test it is connected
+  setLed(true);
+  delay(2000);
   setLed(false);
 
   dht.begin();

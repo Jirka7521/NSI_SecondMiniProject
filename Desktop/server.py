@@ -1,15 +1,3 @@
-"""
-Simple Flask dashboard server for MQTT telemetry.
-
-What this file does:
-1. Loads configuration from .env.
-2. Connects to an MQTT broker (no secure/auth mode) and subscribes to topics.
-3. Stores only the latest measurement in memory.
-4. Serves a web page (dashboard) and a JSON API for that latest measurement.
-
-The goal is readability, so constants and comments are intentionally verbose.
-"""
-
 from __future__ import annotations
 
 import json
@@ -28,7 +16,6 @@ from paho.mqtt import client as mqtt_client
 # Configuration constants
 # -----------------------------------------------------------------------------
 
-# We always resolve paths relative to this file so the app works from any CWD.
 BASE_DIR = Path(__file__).resolve().parent
 ENV_FILE_PATH = BASE_DIR / ".env"
 
@@ -58,8 +45,6 @@ FLASK_PORT = int(os.environ.get("FLASK_PORT", "5000"))
 FLASK_DEBUG = os.environ.get("FLASK_DEBUG", "true").lower() == "true"
 
 # MQTT connection settings.
-# This project intentionally uses plain MQTT without authentication/TLS,
-# because the requirement is local/simple broker usage only.
 MQTT_BROKER_HOST = get_required_env("MQTT_BROKER_HOST")
 MQTT_BROKER_PORT = get_required_int_env("MQTT_BROKER_PORT")
 MQTT_KEEPALIVE_SECONDS = get_required_int_env("MQTT_KEEPALIVE_SECONDS")
@@ -77,17 +62,23 @@ FRONTEND_REFRESH_MS = int(os.environ.get("FRONTEND_REFRESH_MS", "2000"))
 MQTT_DEBUG_LOGGING = os.environ.get("MQTT_DEBUG_LOGGING", "true").lower() == "true"
 DEVICE_OFFLINE_TIMEOUT_SECONDS = int(os.environ.get("DEVICE_OFFLINE_TIMEOUT_SECONDS", "90"))
 
-# API route constants.
-ROUTE_DASHBOARD = "/"
-ROUTE_LATEST = "/api/latest"
-ROUTE_LED_COMMAND = "/api/commands/led"
-ROUTE_TEMPERATURE_TEST = "/api/commands/test-temperature"
-ROUTE_UPDATE_TELEMETRY_PERIOD = "/update_telemetry_period"
+# API route constants (configurable via environment variables).
+# These default values match the previous hard-coded constants so existing
+# deployments continue to work if env vars are not set.
+ROUTE_DASHBOARD = os.environ.get("ROUTE_DASHBOARD", "/")
+ROUTE_LATEST = os.environ.get("ROUTE_LATEST", "/api/latest")
+ROUTE_LED_COMMAND = os.environ.get("ROUTE_LED_COMMAND", "/api/commands/led")
+ROUTE_TEMPERATURE_TEST = os.environ.get("ROUTE_TEMPERATURE_TEST", "/api/commands/test-temperature")
+ROUTE_UPDATE_TELEMETRY_PERIOD = os.environ.get("ROUTE_UPDATE_TELEMETRY_PERIOD", "/update_telemetry_period")
 
-TELEMETRY_PERIOD_MIN_SECONDS = 1
-TELEMETRY_PERIOD_MAX_SECONDS = 300
+# Telemetry period limits (seconds) - configurable via env for flexible deploys.
+TELEMETRY_PERIOD_MIN_SECONDS = int(os.environ.get("TELEMETRY_PERIOD_MIN_SECONDS", "1"))
+TELEMETRY_PERIOD_MAX_SECONDS = int(os.environ.get("TELEMETRY_PERIOD_MAX_SECONDS", "300"))
 
-ALLOWED_LED_COMMANDS = {"ON", "OFF", "TOGGLE"}
+# Allowed LED commands as a comma-separated env value (default: ON,OFF,TOGGLE).
+ALLOWED_LED_COMMANDS = set(
+    [c.strip().upper() for c in os.environ.get("ALLOWED_LED_COMMANDS", "ON,OFF,TOGGLE").split(",") if c.strip()]
+)
 
 
 # -----------------------------------------------------------------------------

@@ -18,13 +18,18 @@ static constexpr uint16_t MQTT_PORT = 1883;
 static constexpr char MQTT_CLIENT_ID[] = "esp32-dht11-client";
 static constexpr char MQTT_USERNAME[] = "";
 static constexpr char MQTT_PASSWORD[] = "";
-static constexpr char MQTT_TOPIC[] = "cvut/nsi/2026/majejirji5/telemetry";
-static constexpr char MQTT_TOPIC_LED_COMMAND[] = "cvut/nsi/2026/majejirji5/led";
-static constexpr char MQTT_TOPIC_PERIOD_COMMAND[] = "cvut/nsi/2026/majejirji5/period";
-static constexpr char MQTT_TOPIC_STATUS[] = "cvut/nsi/2026/majejirji5/status";
-static constexpr char MQTT_TOPIC_TELEMETRY_WILDCARD[] = "cvut/nsi/2026/+/telemetry";
+static constexpr char MQTT_TOPIC[] = "";
+static constexpr char MQTT_TOPIC_LED_COMMAND[] = "";
+static constexpr char MQTT_TOPIC_PERIOD_COMMAND[] = "";
+static constexpr char MQTT_TOPIC_STATUS[] = "";
+static constexpr char MQTT_TOPIC_TELEMETRY_WILDCARD[] = "";
 static constexpr char MQTT_STATUS_ONLINE[] = "ONLINE";
 static constexpr char MQTT_STATUS_OFFLINE[] = "OFFLINE";
+
+// Convenience: centralize topic path fragments so code can build/check topics
+// in one place. Use `MQTT_TOPIC_PREFIX` + device + `MQTT_TOPIC_TELEMETRY_SUFFIX`.
+static constexpr char MQTT_TOPIC_PREFIX[] = "";
+static constexpr char MQTT_TOPIC_TELEMETRY_SUFFIX[] = "";
 
 // Connection behavior
 static constexpr int MQTT_KEEP_ALIVE_SECONDS = 30;
