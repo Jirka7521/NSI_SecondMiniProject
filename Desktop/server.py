@@ -66,6 +66,7 @@ MQTT_KEEPALIVE_SECONDS = get_required_int_env("MQTT_KEEPALIVE_SECONDS")
 MQTT_TOPIC_FILTER = get_required_env("MQTT_TOPIC_FILTER")
 MQTT_LED_COMMAND_TOPIC = get_required_env("MQTT_LED_COMMAND_TOPIC")
 MQTT_TELEMETRY_TOPIC = get_required_env("MQTT_TELEMETRY_TOPIC")
+MQTT_STATUS_TOPIC = get_required_env("MQTT_STATUS_TOPIC")
 
 # We intentionally identify test telemetry as a separate producer.
 DESKTOP_TEST_DEVICE_ID = os.environ.get("DESKTOP_TEST_DEVICE_ID", "desktop-telemetry-tester")
@@ -96,6 +97,8 @@ latest_data: dict[str, Any] = {
     "runtime": None,
     "ledstatus": "unknown",
     "temperature": None,
+    "device_status": "UNKNOWN",
+    "device_status_updated_at": None,
 }
 
 
@@ -158,6 +161,21 @@ def update_latest_data_from_payload(payload_dict: dict[str, Any]) -> None:
         latest_data["temperature"] = temperature
 
 
+def normalize_device_status(raw_status: str) -> str:
+    """Normalize status payload to ONLINE/OFFLINE/UNKNOWN."""
+    normalized = raw_status.strip().upper()
+    if normalized in {"ONLINE", "OFFLINE"}:
+        return normalized
+    return "UNKNOWN"
+
+
+def update_device_status(raw_status: str) -> None:
+    """Update cached device online/offline status and update time."""
+    with latest_data_lock:
+        latest_data["device_status"] = normalize_device_status(raw_status)
+        latest_data["device_status_updated_at"] = datetime.now(tz=timezone.utc).isoformat()
+
+
 # -----------------------------------------------------------------------------
 # MQTT callbacks and startup
 # -----------------------------------------------------------------------------
@@ -165,10 +183,15 @@ def update_latest_data_from_payload(payload_dict: dict[str, Any]) -> None:
 def on_mqtt_connect(client: mqtt_client.Client, userdata: Any, flags: Any, reason_code: int, properties: Any = None) -> None:
     """Subscribe to MQTT topic filter after successful broker connection."""
     if reason_code == 0:
-        # Subscribe to configured topic filter and keep only
-        # the most recently received message in memory.
+        # Subscribe to configured topic filter and status topic.
+        # We subscribe status explicitly so ONLINE/OFFLINE works even if
+        # topic filter is telemetry-only.
         client.subscribe(MQTT_TOPIC_FILTER)
-        print(f"[MQTT] Connected. Subscribed to topic filter: {MQTT_TOPIC_FILTER}")
+        client.subscribe(MQTT_STATUS_TOPIC)
+        print(
+            f"[MQTT] Connected. Subscribed to topic filter: {MQTT_TOPIC_FILTER} "
+            f"and status topic: {MQTT_STATUS_TOPIC}"
+        )
     else:
         print(f"[MQTT] Connection failed with reason code: {reason_code}")
 
@@ -176,6 +199,10 @@ def on_mqtt_connect(client: mqtt_client.Client, userdata: Any, flags: Any, reaso
 def on_mqtt_message(client: mqtt_client.Client, userdata: Any, message: mqtt_client.MQTTMessage) -> None:
     """Parse incoming MQTT JSON payload and update cached latest data."""
     raw_payload = message.payload.decode("utf-8", errors="replace")
+
+    if message.topic == MQTT_STATUS_TOPIC:
+        update_device_status(raw_payload)
+        return
 
     try:
         payload_dict = json.loads(raw_payload)

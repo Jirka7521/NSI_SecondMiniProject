@@ -9,6 +9,10 @@ const measurementDateTimeElement = document.getElementById("measurement-datetime
 const ledStatusElement = document.getElementById("led-status");
 const runtimeElement = document.getElementById("runtime");
 const temperatureElement = document.getElementById("temperature");
+const deviceStatusBannerElement = document.getElementById("device-status-banner");
+const deviceStatusValueElement = document.getElementById("device-status-value");
+const deviceStatusUpdatedElement = document.getElementById("device-status-updated");
+const temperatureUnitSelectElement = document.getElementById("temperature-unit");
 const ledOnButton = document.getElementById("led-on");
 const ledOffButton = document.getElementById("led-off");
 const ledToggleButton = document.getElementById("led-toggle");
@@ -19,6 +23,9 @@ const apiPath = dashboardElement.dataset.apiPath;
 const ledCommandPath = dashboardElement.dataset.ledCommandPath;
 const temperatureTestPath = dashboardElement.dataset.temperatureTestPath;
 const refreshMs = Number(dashboardElement.dataset.refreshMs || "2000");
+const TEMPERATURE_UNIT_COOKIE = "dashboard_temperature_unit";
+
+let selectedTemperatureUnit = "C";
 
 // -----------------------------------------------------------------------------
 // Small formatting helper functions
@@ -37,9 +44,13 @@ function formatRuntime(runtimeSeconds) {
     return `${numericValue} s`;
 }
 
+function celsiusToFahrenheit(celsiusValue) {
+    return (celsiusValue * 9) / 5 + 32;
+}
+
 function formatTemperature(temperatureCelsius) {
     if (temperatureCelsius === null || temperatureCelsius === undefined || temperatureCelsius === "") {
-        return "-- °C";
+        return selectedTemperatureUnit === "F" ? "-- °F" : "-- °C";
     }
 
     const numericValue = Number(temperatureCelsius);
@@ -47,7 +58,64 @@ function formatTemperature(temperatureCelsius) {
         return `${temperatureCelsius}`;
     }
 
+    if (selectedTemperatureUnit === "F") {
+        return `${celsiusToFahrenheit(numericValue).toFixed(1)} °F`;
+    }
+
     return `${numericValue.toFixed(1)} °C`;
+}
+
+function getCookieValue(name) {
+    const encodedName = `${encodeURIComponent(name)}=`;
+    const cookies = document.cookie ? document.cookie.split(";") : [];
+
+    for (const cookiePart of cookies) {
+        const trimmedPart = cookiePart.trim();
+        if (trimmedPart.startsWith(encodedName)) {
+            return decodeURIComponent(trimmedPart.slice(encodedName.length));
+        }
+    }
+
+    return null;
+}
+
+function setCookie(name, value, maxAgeSeconds) {
+    document.cookie = `${encodeURIComponent(name)}=${encodeURIComponent(value)}; path=/; max-age=${maxAgeSeconds}; samesite=lax`;
+}
+
+function loadTemperatureUnitFromCookie() {
+    const cookieUnit = (getCookieValue(TEMPERATURE_UNIT_COOKIE) || "").toUpperCase();
+    if (cookieUnit === "F") {
+        selectedTemperatureUnit = "F";
+    } else {
+        selectedTemperatureUnit = "C";
+    }
+
+    if (temperatureUnitSelectElement) {
+        temperatureUnitSelectElement.value = selectedTemperatureUnit;
+    }
+}
+
+function updateDeviceStatusUi(statusValue, statusUpdatedAt) {
+    if (!deviceStatusBannerElement || !deviceStatusValueElement || !deviceStatusUpdatedElement) {
+        return;
+    }
+
+    const normalizedStatus = String(statusValue || "UNKNOWN").toUpperCase();
+    let className = "status-unknown";
+
+    if (normalizedStatus === "ONLINE") {
+        className = "status-online";
+    } else if (normalizedStatus === "OFFLINE") {
+        className = "status-offline";
+    }
+
+    deviceStatusBannerElement.classList.remove("status-online", "status-offline", "status-unknown");
+    deviceStatusBannerElement.classList.add(className);
+    deviceStatusValueElement.textContent = normalizedStatus;
+    deviceStatusUpdatedElement.textContent = statusUpdatedAt
+        ? `Last status update: ${statusUpdatedAt}`
+        : "Waiting for status message...";
 }
 
 // -----------------------------------------------------------------------------
@@ -59,6 +127,7 @@ function renderData(data) {
     ledStatusElement.textContent = data.ledstatus || "unknown";
     runtimeElement.textContent = formatRuntime(data.runtime);
     temperatureElement.textContent = formatTemperature(data.temperature);
+    updateDeviceStatusUi(data.device_status, data.device_status_updated_at);
 }
 
 function setCommandStatus(message, isError = false) {
@@ -140,6 +209,16 @@ if (ledToggleButton) {
 if (sendTemperatureTestButton) {
     sendTemperatureTestButton.addEventListener("click", sendTemperatureTest);
 }
+
+if (temperatureUnitSelectElement) {
+    temperatureUnitSelectElement.addEventListener("change", () => {
+        selectedTemperatureUnit = temperatureUnitSelectElement.value === "F" ? "F" : "C";
+        setCookie(TEMPERATURE_UNIT_COOKIE, selectedTemperatureUnit, 60 * 60 * 24 * 365);
+        loadLatestData();
+    });
+}
+
+loadTemperatureUnitFromCookie();
 
 // First fetch immediately, then continue polling in fixed intervals.
 loadLatestData();
