@@ -46,7 +46,11 @@ FLASK_DEBUG = os.environ.get("FLASK_DEBUG", "true").lower() == "true"
 MQTT_BROKER_HOST = os.environ.get("MQTT_BROKER_HOST", "localhost")
 MQTT_BROKER_PORT = int(os.environ.get("MQTT_BROKER_PORT", "1883"))
 MQTT_KEEPALIVE_SECONDS = int(os.environ.get("MQTT_KEEPALIVE_SECONDS", "60"))
-MQTT_TOPIC_FILTER = os.environ.get("MQTT_TOPIC_FILTER", "#")
+MQTT_TOPIC_FILTER = os.environ.get("MQTT_TOPIC_FILTER")
+
+if MQTT_TOPIC_FILTER is None:
+    print("[Config] WARNING: MQTT_TOPIC_FILTER not set in .env; defaulting to '#' (subscribe all).")
+    MQTT_TOPIC_FILTER = "#"
 
 # Frontend polling interval in milliseconds.
 FRONTEND_REFRESH_MS = int(os.environ.get("FRONTEND_REFRESH_MS", "2000"))
