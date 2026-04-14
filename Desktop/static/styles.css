@@ -185,6 +185,11 @@ body {
     min-width: 130px;
 }
 
+.period-field input.input-error {
+    border-color: #ef4444;
+    box-shadow: 0 6px 12px rgba(239,68,68,0.06);
+}
+
 .action-button {
     border: none;
     border-radius: 10px;

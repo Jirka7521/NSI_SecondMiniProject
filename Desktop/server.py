@@ -168,7 +168,7 @@ def update_latest_data_from_payload(payload_dict: dict[str, Any]) -> None:
 
 def normalize_device_status(raw_status: str) -> str:
     """Normalize status payload to ONLINE/OFFLINE/UNKNOWN."""
-    normalized = raw_status.strip().upper()
+    normalized = raw_status.strip().strip('"').strip("'").upper()
     if normalized in {"ONLINE", "OFFLINE"}:
         return normalized
     return "UNKNOWN"
@@ -181,13 +181,52 @@ def update_device_status(raw_status: str) -> None:
         latest_data["device_status_updated_at"] = datetime.now(tz=timezone.utc).isoformat()
 
 
+def parse_device_status_payload(raw_payload: str) -> str:
+    """
+    Parse status payload and return ONLINE/OFFLINE/UNKNOWN.
+
+    Accept both plain text ("ONLINE", "OFFLINE") and JSON payloads
+    like {"status": "OFFLINE"} or {"state": "ONLINE"}.
+    """
+    stripped = raw_payload.strip()
+    if not stripped:
+        return "UNKNOWN"
+
+    if stripped.startswith("{") and stripped.endswith("}"):
+        try:
+            parsed = json.loads(stripped)
+            if isinstance(parsed, dict):
+                for key in ("status", "state", "device_status"):
+                    if key in parsed:
+                        return normalize_device_status(str(parsed[key]))
+        except json.JSONDecodeError:
+            pass
+
+    return normalize_device_status(stripped)
+
+
 # -----------------------------------------------------------------------------
 # MQTT callbacks and startup
 # -----------------------------------------------------------------------------
 
-def on_mqtt_connect(client: mqtt_client.Client, userdata: Any, flags: Any, reason_code: int, properties: Any = None) -> None:
+def is_connect_success(reason_code: Any) -> bool:
+    """Return True when MQTT connect reason code means success."""
+    # paho-mqtt v2 can provide either int-like reason code or object-like value.
+    try:
+        return int(reason_code) == 0
+    except (TypeError, ValueError):
+        pass
+
+    value_attr = getattr(reason_code, "value", None)
+    if isinstance(value_attr, int):
+        return value_attr == 0
+
+    return str(reason_code).strip().lower() in {"0", "success"}
+
+
+def on_mqtt_connect(client: mqtt_client.Client, userdata: Any, flags: Any, reason_code: Any, properties: Any = None) -> None:
     """Subscribe to MQTT topic filter after successful broker connection."""
-    if reason_code == 0:
+    if is_connect_success(reason_code):
         # Subscribe to configured topic filter and status topic.
         # We subscribe status explicitly so ONLINE/OFFLINE works even if
         # topic filter is telemetry-only.
@@ -206,7 +245,7 @@ def on_mqtt_message(client: mqtt_client.Client, userdata: Any, message: mqtt_cli
     raw_payload = message.payload.decode("utf-8", errors="replace")
 
     if message.topic == MQTT_STATUS_TOPIC:
-        update_device_status(raw_payload)
+        update_device_status(parse_device_status_payload(raw_payload))
         return
 
     try:

@@ -231,16 +231,23 @@ async function sendTemperatureTest() {
 }
 
 function toPeriodSeconds(rawValue, rawUnit) {
+    // Require integer input in the UI. The rawValue is expected to be
+    // an integer string (e.g. "10" or "2"), not a float.
     const numericValue = Number(rawValue);
     if (!Number.isFinite(numericValue) || numericValue <= 0) {
         return null;
     }
 
-    if (rawUnit === "m") {
-        return Math.round(numericValue * 60);
+    if (!Number.isInteger(numericValue)) {
+        // Signal invalid (non-integer) to caller by returning null.
+        return null;
     }
 
-    return Math.round(numericValue);
+    if (rawUnit === "m") {
+        return numericValue * 60;
+    }
+
+    return numericValue;
 }
 
 async function sendTelemetryPeriodUpdate() {
@@ -250,15 +257,21 @@ async function sendTelemetryPeriodUpdate() {
 
     const selectedUnit = telemetryPeriodUnitElement.value === "m" ? "m" : "s";
     const inputValue = telemetryPeriodValueElement.value;
+    // Clear previous input error state
+    telemetryPeriodValueElement.classList.remove('input-error');
+    setCommandStatus('');
+
     const periodSeconds = toPeriodSeconds(inputValue, selectedUnit);
 
     if (periodSeconds === null) {
-        setCommandStatus("Telemetry period must be a positive number.", true);
+        telemetryPeriodValueElement.classList.add('input-error');
+        setCommandStatus('Telemetry period must be an integer > 0.', true);
         return;
     }
 
     if (periodSeconds < 1 || periodSeconds > 300) {
-        setCommandStatus("Telemetry period must be between 1 second and 5 minutes.", true);
+        telemetryPeriodValueElement.classList.add('input-error');
+        setCommandStatus('Telemetry period must be between 1 second and 5 minutes.', true);
         return;
     }
 
