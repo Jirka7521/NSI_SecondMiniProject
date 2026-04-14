@@ -58,6 +58,35 @@ body {
     transition: background-color 180ms ease, border-color 180ms ease;
 }
 
+.settings-bar {
+    display: flex;
+    gap: 1rem;
+    align-items: center;
+    margin-bottom: 0.8rem;
+}
+
+.settings-item {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    background: rgba(255,255,255,0.7);
+    padding: 0.45rem 0.7rem;
+    border-radius: 10px;
+    box-shadow: 0 6px 12px rgba(15,23,42,0.06);
+}
+
+.settings-item label {
+    font-size: 0.78rem;
+    font-weight: 700;
+    color: var(--text-muted);
+}
+
+.settings-item select {
+    border: 1px solid #cbd5e1;
+    border-radius: 8px;
+    padding: 0.35rem 0.5rem;
+}
+
 .status-label {
     grid-column: 1;
     grid-row: 1;

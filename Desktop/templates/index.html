@@ -16,6 +16,27 @@
             </p>
         </header>
 
+        <section id="settings-bar" class="settings-bar">
+            <div class="settings-item">
+                <label for="temperature-unit">Display unit</label>
+                <select id="temperature-unit" name="temperature-unit">
+                    <option value="C">Celsius (°C)</option>
+                    <option value="F">Fahrenheit (°F)</option>
+                </select>
+            </div>
+
+            <div class="settings-item">
+                <label for="time-zone">Time zone</label>
+                <select id="time-zone" name="time-zone">
+                    <option value="LOCAL">Local (browser)</option>
+                    <option value="UTC">UTC</option>
+                    <option value="Europe/Prague">Europe/Prague</option>
+                    <option value="America/New_York">America/New_York</option>
+                    <option value="Asia/Tokyo">Asia/Tokyo</option>
+                </select>
+            </div>
+        </section>
+
         <section id="device-status-banner" class="status-banner status-unknown" aria-live="polite">
             <span class="status-label">Device Status</span>
             <span id="device-status-value" class="status-value">UNKNOWN</span>
@@ -68,17 +89,7 @@
                 </button>
             </div>
 
-            <h2>Temperature Unit</h2>
-            <p>Choose how temperature is shown in dashboard cards.</p>
-            <div class="button-row">
-                <label class="unit-picker" for="temperature-unit">
-                    <span>Display Unit</span>
-                    <select id="temperature-unit" name="temperature-unit">
-                        <option value="C">Celsius (°C)</option>
-                        <option value="F">Fahrenheit (°F)</option>
-                    </select>
-                </label>
-            </div>
+            
 
             <p id="command-status" class="command-status">No command sent yet.</p>
         </section>

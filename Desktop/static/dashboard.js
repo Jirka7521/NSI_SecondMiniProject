@@ -13,6 +13,7 @@ const deviceStatusBannerElement = document.getElementById("device-status-banner"
 const deviceStatusValueElement = document.getElementById("device-status-value");
 const deviceStatusUpdatedElement = document.getElementById("device-status-updated");
 const temperatureUnitSelectElement = document.getElementById("temperature-unit");
+const timeZoneSelectElement = document.getElementById("time-zone");
 const ledOnButton = document.getElementById("led-on");
 const ledOffButton = document.getElementById("led-off");
 const ledToggleButton = document.getElementById("led-toggle");
@@ -24,8 +25,10 @@ const ledCommandPath = dashboardElement.dataset.ledCommandPath;
 const temperatureTestPath = dashboardElement.dataset.temperatureTestPath;
 const refreshMs = Number(dashboardElement.dataset.refreshMs || "2000");
 const TEMPERATURE_UNIT_COOKIE = "dashboard_temperature_unit";
+const TIMEZONE_COOKIE = "dashboard_time_zone";
 
 let selectedTemperatureUnit = "C";
+let selectedTimeZone = "LOCAL";
 
 // -----------------------------------------------------------------------------
 // Small formatting helper functions
@@ -65,6 +68,29 @@ function formatTemperature(temperatureCelsius) {
     return `${numericValue.toFixed(1)} °C`;
 }
 
+function formatDateTime(valueIsoString, timeZone) {
+    if (!valueIsoString) {
+        return "Waiting for data...";
+    }
+
+    // Some payloads may already be formatted; try parsing to Date.
+    const parsed = new Date(valueIsoString);
+    if (Number.isNaN(parsed.getTime())) {
+        return valueIsoString;
+    }
+
+    if (!timeZone || timeZone === "LOCAL") {
+        return parsed.toLocaleString();
+    }
+
+    try {
+        const opts = { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit', timeZone };
+        return new Intl.DateTimeFormat(undefined, opts).format(parsed);
+    } catch (err) {
+        return parsed.toLocaleString();
+    }
+}
+
 function getCookieValue(name) {
     const encodedName = `${encodeURIComponent(name)}=`;
     const cookies = document.cookie ? document.cookie.split(";") : [];
@@ -96,6 +122,28 @@ function loadTemperatureUnitFromCookie() {
     }
 }
 
+function loadTimeZoneFromCookie() {
+    const cookieTz = getCookieValue(TIMEZONE_COOKIE);
+    if (cookieTz) {
+        selectedTimeZone = cookieTz;
+    } else {
+        // default to browser timezone
+        selectedTimeZone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'LOCAL';
+    }
+
+    if (timeZoneSelectElement) {
+        // If the cookie contains a zone not present in select, add it
+        const exists = Array.from(timeZoneSelectElement.options).some(o => o.value === selectedTimeZone);
+        if (!exists) {
+            const opt = document.createElement('option');
+            opt.value = selectedTimeZone;
+            opt.textContent = selectedTimeZone;
+            timeZoneSelectElement.appendChild(opt);
+        }
+        timeZoneSelectElement.value = selectedTimeZone;
+    }
+}
+
 function updateDeviceStatusUi(statusValue, statusUpdatedAt) {
     if (!deviceStatusBannerElement || !deviceStatusValueElement || !deviceStatusUpdatedElement) {
         return;
@@ -114,7 +162,7 @@ function updateDeviceStatusUi(statusValue, statusUpdatedAt) {
     deviceStatusBannerElement.classList.add(className);
     deviceStatusValueElement.textContent = normalizedStatus;
     deviceStatusUpdatedElement.textContent = statusUpdatedAt
-        ? `Last status update: ${statusUpdatedAt}`
+        ? `Last status update: ${formatDateTime(statusUpdatedAt, selectedTimeZone)}`
         : "Waiting for status message...";
 }
 
@@ -123,7 +171,7 @@ function updateDeviceStatusUi(statusValue, statusUpdatedAt) {
 // -----------------------------------------------------------------------------
 
 function renderData(data) {
-    measurementDateTimeElement.textContent = data.date || "Waiting for data...";
+    measurementDateTimeElement.textContent = formatDateTime(data.date, selectedTimeZone);
     ledStatusElement.textContent = data.ledstatus || "unknown";
     runtimeElement.textContent = formatRuntime(data.runtime);
     temperatureElement.textContent = formatTemperature(data.temperature);
@@ -218,7 +266,16 @@ if (temperatureUnitSelectElement) {
     });
 }
 
+if (timeZoneSelectElement) {
+    timeZoneSelectElement.addEventListener('change', () => {
+        selectedTimeZone = timeZoneSelectElement.value || 'LOCAL';
+        setCookie(TIMEZONE_COOKIE, selectedTimeZone, 60 * 60 * 24 * 365);
+        loadLatestData();
+    });
+}
+
 loadTemperatureUnitFromCookie();
+loadTimeZoneFromCookie();
 
 // First fetch immediately, then continue polling in fixed intervals.
 loadLatestData();
