@@ -26,17 +26,6 @@ static constexpr bool LED_ACTIVE_LOW = true;
 // NOTE: health-status LED indicator removed (manual MQTT commands control the LED)
 
 // ============================================================================
-// MQTT topic map
-// ============================================================================
-static constexpr char MQTT_TOPIC_LED_COMMAND[] = "cvut/nsi/2026/ctu5/led";
-static constexpr char MQTT_TOPIC_PERIOD_COMMAND[] = "cvut/nsi/2026/ctu5/period";
-static constexpr char MQTT_TOPIC_TELEMETRY_WILDCARD[] = "cvut/nsi/2026/+/telemetry";
-
-// Warning indication: 3 blinks with exact 100 ms period (50 ms ON + 50 ms OFF).
-static constexpr uint8_t WARNING_BLINK_COUNT = 3;
-static constexpr unsigned long WARNING_BLINK_PERIOD_MS = 100UL;
-
-// ============================================================================
 // Utility helpers
 // ============================================================================
 void setLed(bool on) {
@@ -369,7 +358,7 @@ void connectMqtt() {
   mqttClient.onMessage(onMqttMessage);
   mqttClient.setKeepAlive(MQTT_KEEP_ALIVE_SECONDS);
   mqttClient.setTimeout(MQTT_SOCKET_TIMEOUT_MS);
-  mqttClient.setWill(MQTT_TOPIC, "{\"status\":\"offline\"}", false, 1);
+  mqttClient.setWill(MQTT_TOPIC_STATUS, MQTT_STATUS_OFFLINE, true, 1);
 
   Serial.print("[MQTT] Connecting to ");
   Serial.print(MQTT_HOST);
@@ -386,6 +375,13 @@ void connectMqtt() {
 
     if (connected) {
       Serial.println("[MQTT] Connected.");
+      bool statusOk = mqttClient.publish(MQTT_TOPIC_STATUS, MQTT_STATUS_ONLINE, true, 1);
+      Serial.print("[MQTT] Status publish ");
+      Serial.print(statusOk ? "OK" : "FAILED");
+      Serial.print(" -> ");
+      Serial.print(MQTT_TOPIC_STATUS);
+      Serial.print(" = ");
+      Serial.println(MQTT_STATUS_ONLINE);
       subscribeToMqttTopics();
       return;
     }

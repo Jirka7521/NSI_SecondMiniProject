@@ -19,6 +19,12 @@ static constexpr char MQTT_CLIENT_ID[] = "esp32-dht11-client";
 static constexpr char MQTT_USERNAME[] = "";
 static constexpr char MQTT_PASSWORD[] = "";
 static constexpr char MQTT_TOPIC[] = "cvut/nsi/2026/majejirji5/telemetry";
+static constexpr char MQTT_TOPIC_LED_COMMAND[] = "cvut/nsi/2026/majejirji5/led";
+static constexpr char MQTT_TOPIC_PERIOD_COMMAND[] = "cvut/nsi/2026/majejirji5/period";
+static constexpr char MQTT_TOPIC_STATUS[] = "cvut/nsi/2026/majejirji5/status";
+static constexpr char MQTT_TOPIC_TELEMETRY_WILDCARD[] = "cvut/nsi/2026/+/telemetry";
+static constexpr char MQTT_STATUS_ONLINE[] = "ONLINE";
+static constexpr char MQTT_STATUS_OFFLINE[] = "OFFLINE";
 
 // Connection behavior
 static constexpr int MQTT_KEEP_ALIVE_SECONDS = 30;
@@ -45,6 +51,8 @@ static constexpr uint8_t DHT_TYPE = DHT11;
 // Application timing
 // ============================================================================
 static constexpr unsigned long PUBLISH_INTERVAL_MS = 10000UL;
+static constexpr uint8_t WARNING_BLINK_COUNT = 3;
+static constexpr unsigned long WARNING_BLINK_PERIOD_MS = 100UL;
 static constexpr uint32_t SERIAL_BAUD_RATE = 115200;
 
 #endif
