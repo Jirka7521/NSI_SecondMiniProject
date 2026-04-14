@@ -276,6 +276,12 @@ void onMqttMessage(String &topic, String &payload) {
   Serial.print(" -> ");
   Serial.println(payload);
 
+  if (topic == MQTT_TOPIC_STATUS) {
+    Serial.print("[MQTT][DEBUG] Status topic observed: ");
+    Serial.println(payload);
+    return;
+  }
+
   if (topic == MQTT_TOPIC_LED_COMMAND) {
     handleLedCommand(payload);
     return;
@@ -295,6 +301,7 @@ void subscribeToMqttTopics() {
   bool okLed = mqttClient.subscribe(MQTT_TOPIC_LED_COMMAND, 1);
   bool okPeriod = mqttClient.subscribe(MQTT_TOPIC_PERIOD_COMMAND, 1);
   bool okTelemetryWildcard = mqttClient.subscribe(MQTT_TOPIC_TELEMETRY_WILDCARD, 1);
+  bool okStatus = mqttClient.subscribe(MQTT_TOPIC_STATUS, 1);
 
   Serial.print("[MQTT] Subscribe LED command: ");
   Serial.println(okLed ? "OK" : "FAILED");
@@ -302,6 +309,8 @@ void subscribeToMqttTopics() {
   Serial.println(okPeriod ? "OK" : "FAILED");
   Serial.print("[MQTT] Subscribe wildcard telemetry: ");
   Serial.println(okTelemetryWildcard ? "OK" : "FAILED");
+  Serial.print("[MQTT] Subscribe status topic: ");
+  Serial.println(okStatus ? "OK" : "FAILED");
 }
 
 // ============================================================================
@@ -361,6 +370,12 @@ void connectMqtt() {
   mqttClient.onMessage(onMqttMessage);
   mqttClient.setKeepAlive(MQTT_KEEP_ALIVE_SECONDS);
   mqttClient.setTimeout(MQTT_SOCKET_TIMEOUT_MS);
+  Serial.println("[MQTT][DEBUG] Configuring Last Will message...");
+  Serial.print("[MQTT][DEBUG] Will topic: ");
+  Serial.println(MQTT_TOPIC_STATUS);
+  Serial.print("[MQTT][DEBUG] Will payload: ");
+  Serial.println(MQTT_STATUS_OFFLINE);
+  Serial.println("[MQTT][DEBUG] Will retain=true qos=1");
   mqttClient.setWill(MQTT_TOPIC_STATUS, MQTT_STATUS_OFFLINE, true, 1);
 
   Serial.print("[MQTT] Connecting to ");
@@ -385,6 +400,7 @@ void connectMqtt() {
       Serial.print(MQTT_TOPIC_STATUS);
       Serial.print(" = ");
       Serial.println(MQTT_STATUS_ONLINE);
+      Serial.println("[MQTT][DEBUG] If the device dies unexpectedly, broker should publish OFFLINE from Last Will.");
       subscribeToMqttTopics();
       return;
     }

@@ -74,6 +74,8 @@ DESKTOP_TEST_DEVICE_ID = os.environ.get("DESKTOP_TEST_DEVICE_ID", "desktop-telem
 
 # Frontend polling interval in milliseconds.
 FRONTEND_REFRESH_MS = int(os.environ.get("FRONTEND_REFRESH_MS", "2000"))
+MQTT_DEBUG_LOGGING = os.environ.get("MQTT_DEBUG_LOGGING", "true").lower() == "true"
+DEVICE_OFFLINE_TIMEOUT_SECONDS = int(os.environ.get("DEVICE_OFFLINE_TIMEOUT_SECONDS", "90"))
 
 # API route constants.
 ROUTE_DASHBOARD = "/"
@@ -176,9 +178,57 @@ def normalize_device_status(raw_status: str) -> str:
 
 def update_device_status(raw_status: str) -> None:
     """Update cached device online/offline status and update time."""
+    normalized = normalize_device_status(raw_status)
+
+    if MQTT_DEBUG_LOGGING:
+        print(f"[MQTT][DEBUG] Device status update raw='{raw_status}' normalized='{normalized}'")
+
     with latest_data_lock:
-        latest_data["device_status"] = normalize_device_status(raw_status)
+        latest_data["device_status"] = normalized
         latest_data["device_status_updated_at"] = datetime.now(tz=timezone.utc).isoformat()
+
+
+def is_status_stale(status_updated_at: Any, now_utc: datetime) -> bool:
+    """Return True when last status update is older than configured timeout."""
+    if not status_updated_at:
+        return True
+
+    if not isinstance(status_updated_at, str):
+        return True
+
+    text = status_updated_at.strip()
+    if not text:
+        return True
+
+    # Accept common ISO values with trailing Z.
+    normalized = text.replace("Z", "+00:00")
+    try:
+        parsed = datetime.fromisoformat(normalized)
+    except ValueError:
+        return True
+
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+
+    age_seconds = (now_utc - parsed).total_seconds()
+    return age_seconds > DEVICE_OFFLINE_TIMEOUT_SECONDS
+
+
+def build_latest_snapshot_with_fallback() -> dict[str, Any]:
+    """Return latest data and infer OFFLINE if ONLINE status is stale."""
+    with latest_data_lock:
+        snapshot = dict(latest_data)
+
+    now_utc = datetime.now(tz=timezone.utc)
+    current_status = normalize_device_status(str(snapshot.get("device_status", "UNKNOWN")))
+    if current_status == "ONLINE" and is_status_stale(snapshot.get("device_status_updated_at"), now_utc):
+        snapshot["device_status"] = "OFFLINE"
+        snapshot["device_status_inferred"] = True
+    else:
+        snapshot["device_status"] = current_status
+        snapshot["device_status_inferred"] = False
+
+    return snapshot
 
 
 def parse_device_status_payload(raw_payload: str) -> str:
@@ -226,12 +276,18 @@ def is_connect_success(reason_code: Any) -> bool:
 
 def on_mqtt_connect(client: mqtt_client.Client, userdata: Any, flags: Any, reason_code: Any, properties: Any = None) -> None:
     """Subscribe to MQTT topic filter after successful broker connection."""
+    if MQTT_DEBUG_LOGGING:
+        print(f"[MQTT][DEBUG] on_connect reason_code={reason_code} type={type(reason_code).__name__}")
+
     if is_connect_success(reason_code):
         # Subscribe to configured topic filter and status topic.
         # We subscribe status explicitly so ONLINE/OFFLINE works even if
         # topic filter is telemetry-only.
-        client.subscribe(MQTT_TOPIC_FILTER)
-        client.subscribe(MQTT_STATUS_TOPIC)
+        topic_filter_result = client.subscribe(MQTT_TOPIC_FILTER)
+        status_result = client.subscribe(MQTT_STATUS_TOPIC)
+        if MQTT_DEBUG_LOGGING:
+            print(f"[MQTT][DEBUG] subscribe({MQTT_TOPIC_FILTER}) -> {topic_filter_result}")
+            print(f"[MQTT][DEBUG] subscribe({MQTT_STATUS_TOPIC}) -> {status_result}")
         print(
             f"[MQTT] Connected. Subscribed to topic filter: {MQTT_TOPIC_FILTER} "
             f"and status topic: {MQTT_STATUS_TOPIC}"
@@ -243,6 +299,12 @@ def on_mqtt_connect(client: mqtt_client.Client, userdata: Any, flags: Any, reaso
 def on_mqtt_message(client: mqtt_client.Client, userdata: Any, message: mqtt_client.MQTTMessage) -> None:
     """Parse incoming MQTT JSON payload and update cached latest data."""
     raw_payload = message.payload.decode("utf-8", errors="replace")
+
+    if MQTT_DEBUG_LOGGING:
+        print(
+            "[MQTT][DEBUG] message "
+            f"topic='{message.topic}' qos={message.qos} retain={message.retain} payload='{raw_payload}'"
+        )
 
     if message.topic == MQTT_STATUS_TOPIC:
         update_device_status(parse_device_status_payload(raw_payload))
@@ -329,9 +391,7 @@ def dashboard() -> str:
 @app.route(ROUTE_LATEST)
 def get_latest_data() -> Any:
     """Return the latest telemetry snapshot as JSON."""
-    with latest_data_lock:
-        snapshot = dict(latest_data)
-
+    snapshot = build_latest_snapshot_with_fallback()
     return jsonify(snapshot)
 
 
