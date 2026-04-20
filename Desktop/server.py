@@ -214,6 +214,15 @@ class TelemetryStore:
 # while keeping the code organized.
 latest_store = TelemetryStore()
 
+# Create Flask application instance used by route decorators below.
+# Explicitly set template and static folders to the Desktop subfolders so
+# Flask can locate the shipped assets when running from the project root.
+app = Flask(
+    __name__,
+    template_folder=str(BASE_DIR / "templates"),
+    static_folder=str(BASE_DIR / "static"),
+)
+
 
 # -----------------------------------------------------------------------------
 # MQTT callbacks and startup (refactored into MQTTManager)
@@ -416,13 +425,13 @@ def on_mqtt_message(client: mqtt_client.Client, userdata: Any, message: mqtt_cli
         )
 
     if message.topic == MQTT_STATUS_TOPIC:
-        update_device_status(parse_device_status_payload(raw_payload))
+        latest_store.update_device_status(parse_device_status_payload(raw_payload))
         return
 
     try:
         payload_dict = json.loads(raw_payload)
         if isinstance(payload_dict, dict):
-            update_latest_data_from_payload(payload_dict)
+            latest_store.update_latest_data_from_payload(payload_dict)
         else:
             print("[MQTT] Ignored non-dictionary JSON payload.")
     except json.JSONDecodeError:
