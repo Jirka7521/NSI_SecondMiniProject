@@ -157,6 +157,9 @@ def update_latest_data_from_payload(payload_dict: dict[str, Any]) -> None:
         latest_data["runtime"] = runtime
         latest_data["ledstatus"] = led_status
         latest_data["temperature"] = temperature
+        # Any valid telemetry frame proves the device is reachable now.
+        latest_data["device_status"] = "ONLINE"
+        latest_data["device_status_updated_at"] = datetime.now(tz=timezone.utc).isoformat()
 
 
 def normalize_device_status(raw_status: str) -> str:
