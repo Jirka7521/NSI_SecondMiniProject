@@ -25,26 +25,196 @@ MQTTClient mqttClient(1024);
 // ============================================================================
 unsigned long lastPublishMs = 0;
 unsigned long publishIntervalMs = PUBLISH_INTERVAL_MS;
-bool ledIsOn = false;
 
 // Board LED on GPIO4 is wired as active-low: LOW = ON, HIGH = OFF.
 // The helper `setLed()` below centralizes active-low handling.
 static constexpr bool LED_ACTIVE_LOW = true;
 
+// ---------------------------------------------------------------------------
+// Lightweight classes to organize responsibilities
+// ---------------------------------------------------------------------------
+
+// Simple LED controller encapsulates pin handling and the active-low wiring.
+class LedController {
+public:
+  LedController(int pin, bool activeLow) : pin(pin), activeLow(activeLow), state(false) {}
+
+  void begin() {
+    pinMode(pin, OUTPUT);
+    // Ensure known state
+    set(false);
+  }
+
+  void set(bool on) {
+    state = on;
+    if (activeLow) {
+      digitalWrite(pin, on ? LOW : HIGH);
+    } else {
+      digitalWrite(pin, on ? HIGH : LOW);
+    }
+  }
+
+  bool isOn() const { return state; }
+
+  const char *statusText() const { return state ? "on" : "off"; }
+
+  void runWarningBlinkSequence() {
+    Serial.println("[WARN] Starting warning blink sequence");
+    bool prevState = state;
+    for (uint8_t i = 0; i < WARNING_BLINK_COUNT; ++i) {
+      set(true);
+      delay(WARNING_BLINK_PERIOD_MS / 2UL);
+      set(false);
+      delay(WARNING_BLINK_PERIOD_MS / 2UL);
+    }
+    set(prevState);
+    Serial.print("[WARN] Warning blink sequence complete, restored LED state=");
+    Serial.println(statusText());
+  }
+
+private:
+  int pin;
+  bool activeLow;
+  bool state;
+};
+
+// Single global LED controller instance used by legacy functions.
+LedController ledController(LED_PIN, LED_ACTIVE_LOW);
+
+// Connectivity manager groups WiFi, NTP and MQTT setup so responsibilities
+// are clear and easier to test/read.
+class ConnectivityManager {
+public:
+  void connectWifi() {
+    if (WiFi.status() == WL_CONNECTED) {
+      return;
+    }
+
+    Serial.print("[WiFi] Connecting to ");
+    Serial.println(WIFI_SSID);
+
+    WiFi.mode(WIFI_STA);
+    WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+
+    while (WiFi.status() != WL_CONNECTED) {
+      delay(500);
+      Serial.print(".");
+    }
+
+    Serial.println();
+    Serial.print("[WiFi] Connected. IP: ");
+    Serial.println(WiFi.localIP());
+  }
+
+  void syncClockWithNtp() {
+    if (isClockSynced()) {
+      return;
+    }
+
+    Serial.println("[NTP] Syncing time...");
+    configTime(NTP_GMT_OFFSET_SECONDS, NTP_DAYLIGHT_OFFSET_SECONDS, NTP_SERVER_1, NTP_SERVER_2,
+               NTP_SERVER_3);
+
+    unsigned long start = millis();
+    while (!isClockSynced() && millis() - start < NTP_SYNC_TIMEOUT_MS) {
+      delay(300);
+      Serial.print("#");
+    }
+
+    Serial.println();
+    if (isClockSynced()) {
+      Serial.print("[NTP] Synced UTC time: ");
+      Serial.println(utcTimestampNow());
+    } else {
+      Serial.println("[NTP] Sync timeout. Will retry in loop.");
+    }
+  }
+
+  void subscribeToMqttTopics() {
+    bool okLed = mqttClient.subscribe(MQTT_TOPIC_LED_COMMAND, 1);
+    bool okPeriod = mqttClient.subscribe(MQTT_TOPIC_PERIOD_COMMAND, 1);
+    bool okTelemetryWildcard = mqttClient.subscribe(MQTT_TOPIC_TELEMETRY_WILDCARD, 1);
+    bool okStatus = mqttClient.subscribe(MQTT_TOPIC_STATUS, 1);
+
+    Serial.print("[MQTT] Subscribe LED command: ");
+    Serial.println(okLed ? "OK" : "FAILED");
+    Serial.print("[MQTT] Subscribe period command: ");
+    Serial.println(okPeriod ? "OK" : "FAILED");
+    Serial.print("[MQTT] Subscribe wildcard telemetry: ");
+    Serial.println(okTelemetryWildcard ? "OK" : "FAILED");
+    Serial.print("[MQTT] Subscribe status topic: ");
+    Serial.println(okStatus ? "OK" : "FAILED");
+  }
+
+  void connectMqtt() {
+    if (mqttClient.connected()) {
+      return;
+    }
+
+    mqttClient.begin(MQTT_HOST, MQTT_PORT, wifiClient);
+    mqttClient.onMessage(onMqttMessage);
+    mqttClient.setKeepAlive(MQTT_KEEP_ALIVE_SECONDS);
+    mqttClient.setTimeout(MQTT_SOCKET_TIMEOUT_MS);
+    Serial.println("[MQTT][DEBUG] Configuring Last Will message...");
+    Serial.print("[MQTT][DEBUG] Will topic: ");
+    Serial.println(MQTT_TOPIC_STATUS);
+    Serial.print("[MQTT][DEBUG] Will payload: ");
+    Serial.println(MQTT_STATUS_OFFLINE);
+    Serial.println("[MQTT][DEBUG] Will retain=true qos=1");
+    mqttClient.setWill(MQTT_TOPIC_STATUS, MQTT_STATUS_OFFLINE, true, 1);
+
+    Serial.print("[MQTT] Connecting to ");
+    Serial.print(MQTT_HOST);
+    Serial.print(":");
+    Serial.println(MQTT_PORT);
+
+    while (!mqttClient.connected()) {
+      bool connected;
+      if (strlen(MQTT_USERNAME) > 0) {
+        connected = mqttClient.connect(MQTT_CLIENT_ID, MQTT_USERNAME, MQTT_PASSWORD);
+      } else {
+        connected = mqttClient.connect(MQTT_CLIENT_ID);
+      }
+
+      if (connected) {
+        Serial.println("[MQTT] Connected.");
+        bool statusOk = mqttClient.publish(MQTT_TOPIC_STATUS, MQTT_STATUS_ONLINE, true, 1);
+        Serial.print("[MQTT] Status publish ");
+        Serial.print(statusOk ? "OK" : "FAILED");
+        Serial.print(" -> ");
+        Serial.print(MQTT_TOPIC_STATUS);
+        Serial.print(" = ");
+        Serial.println(MQTT_STATUS_ONLINE);
+        Serial.println("[MQTT][DEBUG] If the device dies unexpectedly, broker should publish OFFLINE from Last Will.");
+        subscribeToMqttTopics();
+        return;
+      }
+
+      Serial.print("[MQTT] Failed, code=");
+      Serial.print(mqttClient.lastError());
+      Serial.println(". Retry in 2s.");
+      delay(2000);
+    }
+  }
+
+  void ensureConnectionsAndTime() {
+    connectWifi();
+    syncClockWithNtp();
+    connectMqtt();
+  }
+};
+
+ConnectivityManager connectivityManager;
+
 // ============================================================================
 // Utility helpers
 // ============================================================================
 void setLed(bool on) {
-  ledIsOn = on;
-  if (LED_ACTIVE_LOW) {
-    digitalWrite(LED_PIN, on ? LOW : HIGH);
-  } else {
-    digitalWrite(LED_PIN, on ? HIGH : LOW);
-  }
+  ledController.set(on);
 }
 
 const char *ledStatusText() {
-  return ledIsOn ? "on" : "off";
+  return ledController.statusText();
 }
 
 bool startsWithPrefix(const String &value, const char *prefix) {
@@ -88,20 +258,8 @@ String utcTimestampNow() {
 }
 
 void runWarningBlinkSequence() {
-  Serial.println("[WARN] Starting warning blink sequence");
-  bool prevState = ledIsOn;
-
-  for (uint8_t i = 0; i < WARNING_BLINK_COUNT; ++i) {
-    setLed(true);
-    delay(WARNING_BLINK_PERIOD_MS / 2UL);
-    setLed(false);
-    delay(WARNING_BLINK_PERIOD_MS / 2UL);
-  }
-
-  // Restore previous LED state so user-controlled LED isn't lost
-  setLed(prevState);
-  Serial.print("[WARN] Warning blink sequence complete, restored LED state=");
-  Serial.println(ledStatusText());
+  // Delegate to controller; kept as wrapper for call-site compatibility.
+  ledController.runWarningBlinkSequence();
 }
 
 bool parseTemperatureFromTelemetry(const String &payload, float &temperatureOut) {
@@ -307,174 +465,78 @@ void onMqttMessage(String &topic, String &payload) {
 }
 
 void subscribeToMqttTopics() {
-  bool okLed = mqttClient.subscribe(MQTT_TOPIC_LED_COMMAND, 1);
-  bool okPeriod = mqttClient.subscribe(MQTT_TOPIC_PERIOD_COMMAND, 1);
-  bool okTelemetryWildcard = mqttClient.subscribe(MQTT_TOPIC_TELEMETRY_WILDCARD, 1);
-  bool okStatus = mqttClient.subscribe(MQTT_TOPIC_STATUS, 1);
-
-  Serial.print("[MQTT] Subscribe LED command: ");
-  Serial.println(okLed ? "OK" : "FAILED");
-  Serial.print("[MQTT] Subscribe period command: ");
-  Serial.println(okPeriod ? "OK" : "FAILED");
-  Serial.print("[MQTT] Subscribe wildcard telemetry: ");
-  Serial.println(okTelemetryWildcard ? "OK" : "FAILED");
-  Serial.print("[MQTT] Subscribe status topic: ");
-  Serial.println(okStatus ? "OK" : "FAILED");
+  connectivityManager.subscribeToMqttTopics();
 }
 
 // ============================================================================
 // Connectivity setup
 // ============================================================================
 void connectWifi() {
-  if (WiFi.status() == WL_CONNECTED) {
-    return;
-  }
-
-  Serial.print("[WiFi] Connecting to ");
-  Serial.println(WIFI_SSID);
-
-  WiFi.mode(WIFI_STA);
-  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(500);
-    Serial.print(".");
-  }
-
-  Serial.println();
-  Serial.print("[WiFi] Connected. IP: ");
-  Serial.println(WiFi.localIP());
+  connectivityManager.connectWifi();
 }
 
 void syncClockWithNtp() {
-  if (isClockSynced()) {
-    return;
-  }
-
-  Serial.println("[NTP] Syncing time...");
-  configTime(NTP_GMT_OFFSET_SECONDS, NTP_DAYLIGHT_OFFSET_SECONDS, NTP_SERVER_1, NTP_SERVER_2,
-             NTP_SERVER_3);
-
-  unsigned long start = millis();
-  while (!isClockSynced() && millis() - start < NTP_SYNC_TIMEOUT_MS) {
-    delay(300);
-    Serial.print("#");
-  }
-
-  Serial.println();
-  if (isClockSynced()) {
-    Serial.print("[NTP] Synced UTC time: ");
-    Serial.println(utcTimestampNow());
-  } else {
-    Serial.println("[NTP] Sync timeout. Will retry in loop.");
-  }
+  connectivityManager.syncClockWithNtp();
 }
 
 void connectMqtt() {
-  if (mqttClient.connected()) {
-    return;
-  }
-
-  mqttClient.begin(MQTT_HOST, MQTT_PORT, wifiClient);
-  mqttClient.onMessage(onMqttMessage);
-  mqttClient.setKeepAlive(MQTT_KEEP_ALIVE_SECONDS);
-  mqttClient.setTimeout(MQTT_SOCKET_TIMEOUT_MS);
-  Serial.println("[MQTT][DEBUG] Configuring Last Will message...");
-  Serial.print("[MQTT][DEBUG] Will topic: ");
-  Serial.println(MQTT_TOPIC_STATUS);
-  Serial.print("[MQTT][DEBUG] Will payload: ");
-  Serial.println(MQTT_STATUS_OFFLINE);
-  Serial.println("[MQTT][DEBUG] Will retain=true qos=1");
-  mqttClient.setWill(MQTT_TOPIC_STATUS, MQTT_STATUS_OFFLINE, true, 1);
-
-  Serial.print("[MQTT] Connecting to ");
-  Serial.print(MQTT_HOST);
-  Serial.print(":");
-  Serial.println(MQTT_PORT);
-
-  while (!mqttClient.connected()) {
-    bool connected;
-    if (strlen(MQTT_USERNAME) > 0) {
-      connected = mqttClient.connect(MQTT_CLIENT_ID, MQTT_USERNAME, MQTT_PASSWORD);
-    } else {
-      connected = mqttClient.connect(MQTT_CLIENT_ID);
-    }
-
-    if (connected) {
-      Serial.println("[MQTT] Connected.");
-      bool statusOk = mqttClient.publish(MQTT_TOPIC_STATUS, MQTT_STATUS_ONLINE, true, 1);
-      Serial.print("[MQTT] Status publish ");
-      Serial.print(statusOk ? "OK" : "FAILED");
-      Serial.print(" -> ");
-      Serial.print(MQTT_TOPIC_STATUS);
-      Serial.print(" = ");
-      Serial.println(MQTT_STATUS_ONLINE);
-      Serial.println("[MQTT][DEBUG] If the device dies unexpectedly, broker should publish OFFLINE from Last Will.");
-      subscribeToMqttTopics();
-      return;
-    }
-
-    Serial.print("[MQTT] Failed, code=");
-    Serial.print(mqttClient.lastError());
-    Serial.println(". Retry in 2s.");
-    delay(2000);
-  }
+  connectivityManager.connectMqtt();
 }
 
 void ensureConnectionsAndTime() {
-  connectWifi();
-  syncClockWithNtp();
-  connectMqtt();
+  connectivityManager.ensureConnectionsAndTime();
 }
 
 // ============================================================================
 // Telemetry payload
 // ============================================================================
-String createTelemetryPayload(float temperatureC) {
-  // Build a compact JSON object with current telemetry fields:
-  // - `date`: UTC ISO timestamp
-  // - `runtime`: seconds since boot
-  // - `ledstatus`: current LED state
-  // - `temperature`: float Celsius
-  // - `device`: client identifier
-  JsonDocument doc;
-  doc["date"] = utcTimestampNow();
-  doc["runtime"] = static_cast<unsigned long>(millis() / 1000UL);
-  doc["ledstatus"] = ledStatusText();
-  doc["temperature"] = temperatureC;
-  doc["device"] = MQTT_CLIENT_ID;
+// The TelemetryPublisher class collects sensor readings and publishes
+// serialized telemetry frames to MQTT. Keeping this logic in a class
+// makes the flow clearer and easier to test in isolation.
+class TelemetryPublisher {
+public:
+  String createPayload(float temperatureC) {
+    JsonDocument doc;
+    doc["date"] = utcTimestampNow();
+    doc["runtime"] = static_cast<unsigned long>(millis() / 1000UL);
+    doc["ledstatus"] = ledStatusText();
+    doc["temperature"] = temperatureC;
+    doc["device"] = MQTT_CLIENT_ID;
 
-  String payload;
-  serializeJson(doc, payload);
-  return payload;
-}
-
-void publishTelemetry() {
-  float temperatureC = dht.readTemperature();
-
-  if (isnan(temperatureC)) {
-    Serial.println("[DHT11] Read failed.");
-    return;
+    String payload;
+    serializeJson(doc, payload);
+    return payload;
   }
 
-  String payload = createTelemetryPayload(temperatureC);
-  bool ok = mqttClient.publish(MQTT_TOPIC, payload, false, 1);
+  void publishTelemetry() {
+    float temperatureC = dht.readTemperature();
 
-  Serial.print("[MQTT] Publish ");
-  Serial.print(ok ? "OK" : "FAILED");
-  Serial.print(" -> ");
-  Serial.println(payload);
-}
+    if (isnan(temperatureC)) {
+      Serial.println("[DHT11] Read failed.");
+      return;
+    }
+
+    String payload = createPayload(temperatureC);
+    bool ok = mqttClient.publish(MQTT_TOPIC, payload, false, 1);
+
+    Serial.print("[MQTT] Publish ");
+    Serial.print(ok ? "OK" : "FAILED");
+    Serial.print(" -> ");
+    Serial.println(payload);
+  }
+};
+
+TelemetryPublisher telemetryPublisher;
 
 void setup() {
   Serial.begin(SERIAL_BAUD_RATE);
   delay(200);
 
-  pinMode(LED_PIN, OUTPUT);
-  //Blik with LED to test it is connected
-  setLed(true);
+  // Initialize LED controller and perform a short blink to indicate boot.
+  ledController.begin();
+  ledController.set(true);
   delay(2000);
-  setLed(false);
+  ledController.set(false);
 
   dht.begin();
   ensureConnectionsAndTime();
@@ -489,6 +551,6 @@ void loop() {
   unsigned long now = millis();
   if (now - lastPublishMs >= publishIntervalMs) {
     lastPublishMs = now;
-    publishTelemetry();
+    telemetryPublisher.publishTelemetry();
   }
 }
