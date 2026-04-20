@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>MQTT Device Dashboard</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+</head>
+<body>
+    <main class="layout">
+        <header class="header">
+            <h1>Device Live Dashboard</h1>
+            <p>
+                Latest measurement from MQTT topic.
+                Data refreshes automatically.
+            </p>
+        </header>
+
+        <section id="settings-bar" class="settings-bar">
+            <div class="settings-item">
+                <label for="temperature-unit">Display unit</label>
+                <select id="temperature-unit" name="temperature-unit">
+                    <option value="C">Celsius (°C)</option>
+                    <option value="F">Fahrenheit (°F)</option>
+                </select>
+            </div>
+
+            <div class="settings-item">
+                <label for="time-zone">Time zone</label>
+                <select id="time-zone" name="time-zone">
+                    <option value="LOCAL">Local (browser)</option>
+                    <option value="UTC">UTC</option>
+                    <option value="Europe/Prague">Europe/Prague</option>
+                    <option value="America/New_York">America/New_York</option>
+                    <option value="Asia/Tokyo">Asia/Tokyo</option>
+                </select>
+            </div>
+        </section>
+
+        <section id="device-status-banner" class="status-banner status-unknown" aria-live="polite">
+            <span class="status-label">Device Status</span>
+            <span id="device-status-value" class="status-value">UNKNOWN</span>
+            <span id="device-status-updated" class="status-updated">Waiting for status message...</span>
+        </section>
+
+        <section
+            id="dashboard"
+            class="grid"
+            data-api-path="{{ api_latest_path }}"
+            data-led-command-path="{{ api_led_command_path }}"
+            data-temperature-test-path="{{ api_temperature_test_path }}"
+            data-update-period-path="{{ api_update_period_path }}"
+            data-refresh-ms="{{ frontend_refresh_ms }}"
+        >
+            <article class="card">
+                <h2>Measurement Date & Time</h2>
+                <p id="measurement-datetime" class="value">Waiting for data...</p>
+            </article>
+
+            <article class="card">
+                <h2>LED Status</h2>
+                <p id="led-status" class="value">unknown</p>
+            </article>
+
+            <article class="card">
+                <h2>Runtime</h2>
+                <p id="runtime" class="value">-- s</p>
+            </article>
+
+            <article class="card">
+                <h2>Temperature</h2>
+                <p id="temperature" class="value">-- °C</p>
+            </article>
+        </section>
+
+        <section class="card controls">
+            <h2>Device Commands</h2>
+            <p>Send LED command to topic {{ mqtt_led_command_topic }}.</p>
+            <div class="button-row">
+                <button id="led-on" class="action-button">LED ON</button>
+                <button id="led-off" class="action-button">LED OFF</button>
+                <button id="led-toggle" class="action-button">LED TOGGLE</button>
+            </div>
+
+            <h2>Telemetry Period</h2>
+            <p>
+                Set publish interval between 1 second and 5 minutes
+                (published to {{ mqtt_period_command_topic }} in seconds).
+            </p>
+            <div class="period-controls">
+                <label class="period-field" for="telemetry-period-value">
+                    <span>Value</span>
+                    <input id="telemetry-period-value" type="number" min="1" step="1" value="10">
+                </label>
+
+                <label class="period-field" for="telemetry-period-unit">
+                    <span>Unit</span>
+                    <select id="telemetry-period-unit" name="telemetry-period-unit">
+                        <option value="s">Seconds</option>
+                        <option value="m">Minutes</option>
+                    </select>
+                </label>
+
+                <button id="set-telemetry-period" class="action-button">Set Period</button>
+            </div>
+
+            <h2>Telemetry Test</h2>
+            <p>Send temperature 100 °C as another device to {{ mqtt_telemetry_topic }}.</p>
+            <div class="button-row">
+                <button id="send-temperature-test" class="action-button action-button-secondary">
+                    Send Test Telemetry (100 °C)
+                </button>
+            </div>
+
+            
+
+            <p id="command-status" class="command-status">No command sent yet.</p>
+        </section>
+    </main>
+
+    <script src="{{ url_for('static', filename='dashboard.js') }}"></script>
+</body>
+</html>

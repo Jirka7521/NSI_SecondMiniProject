@@ -1,0 +1,254 @@
+:root {
+    --bg-start: #f8fafc;
+    --bg-end: #e2e8f0;
+    --surface: #ffffff;
+    --text-main: #1f2937;
+    --text-muted: #475569;
+    --accent: #0f766e;
+    --card-shadow: 0 14px 28px rgba(15, 23, 42, 0.1);
+}
+
+* {
+    box-sizing: border-box;
+}
+
+body {
+    margin: 0;
+    min-height: 100vh;
+    font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+    color: var(--text-main);
+    background: linear-gradient(130deg, var(--bg-start), var(--bg-end));
+}
+
+.layout {
+    width: min(1000px, 92vw);
+    margin: 2rem auto;
+}
+
+.header {
+    margin-bottom: 1.5rem;
+}
+
+.header h1 {
+    margin: 0 0 0.5rem;
+    color: var(--accent);
+}
+
+.header p {
+    margin: 0;
+    color: var(--text-muted);
+}
+
+.grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 1rem;
+}
+
+.status-banner {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    align-items: center;
+    gap: 0.3rem 0.9rem;
+    border-radius: 16px;
+    padding: 1rem 1.1rem;
+    margin-bottom: 1rem;
+    border: 3px solid transparent;
+    box-shadow: var(--card-shadow);
+    transition: background-color 180ms ease, border-color 180ms ease;
+}
+
+.settings-bar {
+    display: flex;
+    gap: 1rem;
+    align-items: center;
+    margin-bottom: 0.8rem;
+}
+
+.settings-item {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    background: rgba(255,255,255,0.7);
+    padding: 0.45rem 0.7rem;
+    border-radius: 10px;
+    box-shadow: 0 6px 12px rgba(15,23,42,0.06);
+}
+
+.settings-item label {
+    font-size: 0.78rem;
+    font-weight: 700;
+    color: var(--text-muted);
+}
+
+.settings-item select {
+    border: 1px solid #cbd5e1;
+    border-radius: 8px;
+    padding: 0.35rem 0.5rem;
+}
+
+.status-label {
+    grid-column: 1;
+    grid-row: 1;
+    font-size: 0.85rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    opacity: 0.95;
+}
+
+.status-value {
+    grid-column: 2;
+    grid-row: 1;
+    font-size: 1.8rem;
+    font-weight: 800;
+    letter-spacing: 0.06em;
+}
+
+.status-updated {
+    grid-column: 1 / span 2;
+    grid-row: 2;
+    font-size: 0.9rem;
+    font-weight: 600;
+}
+
+.status-online {
+    color: #166534;
+    background: linear-gradient(135deg, #dcfce7, #bbf7d0);
+    border-color: #22c55e;
+}
+
+.status-offline {
+    color: #7f1d1d;
+    background: linear-gradient(135deg, #fee2e2, #fecaca);
+    border-color: #ef4444;
+}
+
+.status-unknown {
+    color: #374151;
+    background: linear-gradient(135deg, #e5e7eb, #d1d5db);
+    border-color: #6b7280;
+}
+
+.card {
+    background: var(--surface);
+    border-radius: 14px;
+    padding: 1rem;
+    box-shadow: var(--card-shadow);
+}
+
+.card h2 {
+    margin: 0 0 0.7rem;
+    font-size: 1rem;
+    color: var(--text-muted);
+}
+
+.controls {
+    margin-top: 1rem;
+}
+
+.controls p {
+    margin: 0 0 0.8rem;
+    color: var(--text-muted);
+}
+
+.button-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.6rem;
+    margin-bottom: 1rem;
+}
+
+.period-controls {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: end;
+    gap: 0.6rem;
+    margin-bottom: 1rem;
+}
+
+.period-field {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+    font-weight: 700;
+    color: var(--text-muted);
+}
+
+.period-field input,
+.period-field select {
+    border: 1px solid #94a3b8;
+    border-radius: 8px;
+    padding: 0.45rem 0.6rem;
+    font-size: 0.95rem;
+    background: #ffffff;
+    min-width: 130px;
+}
+
+.period-field input.input-error {
+    border-color: #ef4444;
+    box-shadow: 0 6px 12px rgba(239,68,68,0.06);
+}
+
+.action-button {
+    border: none;
+    border-radius: 10px;
+    padding: 0.65rem 1rem;
+    background: var(--accent);
+    color: #ffffff;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.action-button:hover {
+    opacity: 0.92;
+}
+
+.action-button-secondary {
+    background: #0f172a;
+}
+
+.unit-picker {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.6rem;
+    font-weight: 700;
+}
+
+.unit-picker select {
+    border: 1px solid #94a3b8;
+    border-radius: 8px;
+    padding: 0.45rem 0.6rem;
+    font-size: 0.95rem;
+    background: #ffffff;
+}
+
+.command-status {
+    margin: 0;
+    font-weight: 600;
+    color: #0f172a;
+}
+
+.command-status.error {
+    color: #b91c1c;
+}
+
+.value {
+    margin: 0;
+    font-size: 1.4rem;
+    font-weight: 700;
+}
+
+@media (max-width: 600px) {
+    .layout {
+        margin: 1rem auto;
+    }
+
+    .status-value {
+        font-size: 1.45rem;
+    }
+
+    .value {
+        font-size: 1.2rem;
+    }
+}
