@@ -11,6 +11,7 @@ from dotenv import load_dotenv
 from flask import Flask, jsonify, render_template, request
 from paho.mqtt import client as mqtt_client
 
+from api_endpoints import RestApiEndpoints
 from sqlite_store import TelemetrySQLiteStore
 
 
@@ -249,6 +250,10 @@ app = Flask(
     template_folder=str(BASE_DIR / "templates"),
     static_folder=str(BASE_DIR / "static"),
 )
+
+# Register required REST API endpoints from a dedicated module/class.
+rest_api_endpoints = RestApiEndpoints(sqlite_store)
+rest_api_endpoints.register(app)
 
 
 # -----------------------------------------------------------------------------

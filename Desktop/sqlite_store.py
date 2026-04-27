@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sqlite3
 import threading
+from typing import Any
 from pathlib import Path
 
 
@@ -207,3 +208,245 @@ class TelemetrySQLiteStore:
             return None
 
         return value if value > 0 else None
+
+    @staticmethod
+    def _row_to_device_dict(row: tuple[Any, ...]) -> dict[str, Any]:
+        """Map a devices row into a stable JSON-friendly dictionary."""
+        return {
+            "id": int(row[0]),
+            "device_id": str(row[1]),
+            "first_seen_at": str(row[2]),
+            "last_seen_at": str(row[3]),
+            "last_uptime_seconds": int(row[4]),
+            "measurement_period_seconds": int(row[5]),
+            "message_count": int(row[6]),
+        }
+
+    @staticmethod
+    def _row_to_measurement_dict(row: tuple[Any, ...]) -> dict[str, Any]:
+        """Map a joined measurement row into a stable API dictionary."""
+        return {
+            "id": int(row[0]),
+            "device_id": str(row[1]),
+            "temperature": float(row[2]),
+            "timestamp": str(row[3]),
+            "created_at": str(row[4]),
+        }
+
+    def list_devices(self) -> list[dict[str, Any]]:
+        """Return all devices ordered by most recently seen first."""
+        with self._lock:
+            with self._get_connection() as connection:
+                rows = connection.execute(
+                    """
+                    SELECT
+                        id,
+                        device_name,
+                        first_seen_at_iso8601,
+                        last_seen_at_iso8601,
+                        last_uptime_seconds,
+                        measurement_period_seconds,
+                        message_count
+                    FROM devices
+                    ORDER BY last_seen_at_iso8601 DESC, id DESC
+                    """
+                ).fetchall()
+
+        return [self._row_to_device_dict(row) for row in rows]
+
+    def get_device(self, device_name: str) -> dict[str, Any] | None:
+        """Return one device by textual device identifier, or None."""
+        with self._lock:
+            with self._get_connection() as connection:
+                row = connection.execute(
+                    """
+                    SELECT
+                        id,
+                        device_name,
+                        first_seen_at_iso8601,
+                        last_seen_at_iso8601,
+                        last_uptime_seconds,
+                        measurement_period_seconds,
+                        message_count
+                    FROM devices
+                    WHERE device_name = ?
+                    """,
+                    (device_name,),
+                ).fetchone()
+
+        if not row:
+            return None
+        return self._row_to_device_dict(row)
+
+    def get_device_last_uptime(self, device_name: str) -> int | None:
+        """Return last known uptime for a device (used by API fallback logic)."""
+        with self._lock:
+            with self._get_connection() as connection:
+                row = connection.execute(
+                    "SELECT last_uptime_seconds FROM devices WHERE device_name = ?",
+                    (device_name,),
+                ).fetchone()
+
+        if not row:
+            return None
+        try:
+            value = int(row[0])
+        except (TypeError, ValueError):
+            return None
+        return value if value >= 0 else None
+
+    def get_measurement(self, measurement_id: int) -> dict[str, Any] | None:
+        """Return one measurement record by id, including textual device identifier."""
+        with self._lock:
+            with self._get_connection() as connection:
+                row = connection.execute(
+                    """
+                    SELECT
+                        m.measurement_id,
+                        d.device_name,
+                        m.temperature_c,
+                        m.measured_at_iso8601,
+                        m.created_at_iso8601
+                    FROM measurements m
+                    JOIN devices d ON d.id = m.device_id
+                    WHERE m.measurement_id = ?
+                    """,
+                    (measurement_id,),
+                ).fetchone()
+
+        if not row:
+            return None
+        return self._row_to_measurement_dict(row)
+
+    def count_all_measurements(self) -> int:
+        """Return total telemetry count in DB without any filters."""
+        with self._lock:
+            with self._get_connection() as connection:
+                row = connection.execute("SELECT COUNT(*) FROM measurements").fetchone()
+
+        return int(row[0]) if row else 0
+
+    def list_measurements(
+        self,
+        *,
+        device_id: str | None,
+        from_iso8601: str | None,
+        to_iso8601: str | None,
+        sort_field: str,
+        sort_order: str,
+    ) -> list[dict[str, Any]]:
+        """
+        Return telemetry rows filtered and sorted directly in SQL.
+
+        sort_field must be validated by caller and be one of:
+        - timestamp
+        - temperature
+
+        sort_order must be validated by caller and be one of:
+        - asc
+        - desc
+        """
+        # We only interpolate SQL identifiers from a strict whitelist.
+        order_field_sql = "m.measured_at_iso8601" if sort_field == "timestamp" else "m.temperature_c"
+        order_direction_sql = "ASC" if sort_order == "asc" else "DESC"
+
+        sql = """
+            SELECT
+                m.measurement_id,
+                d.device_name,
+                m.temperature_c,
+                m.measured_at_iso8601,
+                m.created_at_iso8601
+            FROM measurements m
+            JOIN devices d ON d.id = m.device_id
+            WHERE 1 = 1
+        """
+        params: list[Any] = []
+
+        if device_id is not None:
+            sql += " AND d.device_name = ?"
+            params.append(device_id)
+
+        if from_iso8601 is not None:
+            sql += " AND m.measured_at_iso8601 >= ?"
+            params.append(from_iso8601)
+
+        if to_iso8601 is not None:
+            sql += " AND m.measured_at_iso8601 <= ?"
+            params.append(to_iso8601)
+
+        sql += f" ORDER BY {order_field_sql} {order_direction_sql}, m.measurement_id DESC"
+
+        with self._lock:
+            with self._get_connection() as connection:
+                rows = connection.execute(sql, tuple(params)).fetchall()
+
+        return [self._row_to_measurement_dict(row) for row in rows]
+
+    def delete_measurement(self, measurement_id: int) -> dict[str, Any] | None:
+        """Delete one measurement and return deleted row details, or None."""
+        with self._lock:
+            with self._get_connection() as connection:
+                row = connection.execute(
+                    """
+                    SELECT
+                        m.measurement_id,
+                        d.device_name,
+                        m.temperature_c,
+                        m.measured_at_iso8601,
+                        m.created_at_iso8601
+                    FROM measurements m
+                    JOIN devices d ON d.id = m.device_id
+                    WHERE m.measurement_id = ?
+                    """,
+                    (measurement_id,),
+                ).fetchone()
+
+                if not row:
+                    return None
+
+                connection.execute(
+                    "DELETE FROM measurements WHERE measurement_id = ?",
+                    (measurement_id,),
+                )
+
+        return self._row_to_measurement_dict(row)
+
+    def delete_device(self, device_name: str) -> dict[str, Any] | None:
+        """
+        Delete device by textual identifier and return deletion summary.
+
+        Telemetry rows are deleted automatically by foreign key cascade.
+        """
+        with self._lock:
+            with self._get_connection() as connection:
+                row = connection.execute(
+                    """
+                    SELECT
+                        id,
+                        device_name,
+                        first_seen_at_iso8601,
+                        last_seen_at_iso8601,
+                        last_uptime_seconds,
+                        measurement_period_seconds,
+                        message_count
+                    FROM devices
+                    WHERE device_name = ?
+                    """,
+                    (device_name,),
+                ).fetchone()
+
+                if not row:
+                    return None
+
+                deleted_measurements_row = connection.execute(
+                    "SELECT COUNT(*) FROM measurements WHERE device_id = ?",
+                    (int(row[0]),),
+                ).fetchone()
+                deleted_measurements_count = int(deleted_measurements_row[0]) if deleted_measurements_row else 0
+
+                connection.execute("DELETE FROM devices WHERE id = ?", (int(row[0]),))
+
+        deleted = self._row_to_device_dict(row)
+        deleted["deleted_measurements"] = deleted_measurements_count
+        return deleted
