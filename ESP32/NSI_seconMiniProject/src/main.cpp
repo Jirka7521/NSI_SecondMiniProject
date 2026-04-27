@@ -319,7 +319,7 @@ void handleLedCommand(const String &payload) {
     return;
   }
   else if (upper == "TOGGLE") {
-    setLed(!ledIsOn);
+    setLed(!ledController.isOn());
     Serial.print("[MQTT] LED command -> TOGGLE, new state=");
     Serial.println(ledStatusText());
     return;
@@ -336,7 +336,7 @@ void handleLedCommand(const String &payload) {
         cmd.toUpperCase();
         if (cmd == "ON") { setLed(true); Serial.println("[MQTT] LED JSON command -> ON"); return; }
         if (cmd == "OFF") { setLed(false); Serial.println("[MQTT] LED JSON command -> OFF"); return; }
-        if (cmd == "TOGGLE") { setLed(!ledIsOn); Serial.println("[MQTT] LED JSON command -> TOGGLE"); return; }
+        if (cmd == "TOGGLE") { setLed(!ledController.isOn()); Serial.println("[MQTT] LED JSON command -> TOGGLE"); return; }
       }
 
       // also accept numeric or boolean fields
@@ -501,6 +501,7 @@ public:
     doc["runtime"] = static_cast<unsigned long>(millis() / 1000UL);
     doc["ledstatus"] = ledStatusText();
     doc["temperature"] = temperatureC;
+    doc["period_seconds"] = publishIntervalMs / 1000UL;
     doc["device"] = MQTT_CLIENT_ID;
 
     String payload;

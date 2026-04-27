@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="cs">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Dashboard teploty</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='dashboard-page.css') }}">
+</head>
+<body>
+    <main class="dashboard-shell">
+        <header class="hero">
+            <h1>Vývoj teploty v čase</h1>
+        </header>
+
+        <section class="panel">
+            <form id="history-form" class="history-form" novalidate>
+                <div class="field">
+                    <label for="device-select">Zařízení</label>
+                    <select id="device-select" name="device_id" required>
+                        <option value="">Načítám zařízení...</option>
+                    </select>
+                </div>
+
+                <fieldset class="field fieldset-inline">
+                    <legend>Režim času</legend>
+                    <label>
+                        <input type="radio" name="mode" value="relative" checked>
+                        Relativní
+                    </label>
+                    <label>
+                        <input type="radio" name="mode" value="absolute">
+                        Absolutní
+                    </label>
+                </fieldset>
+
+                <!-- Absolutní okno: uživatel vybírá přesné datum a čas od/do -->
+                <div id="absolute-controls" class="time-controls hidden" aria-hidden="true">
+                    <div class="field">
+                        <label for="from-input">Od</label>
+                        <input id="from-input" name="from" type="datetime-local">
+                    </div>
+                    <div class="field">
+                        <label for="to-input">Do</label>
+                        <input id="to-input" name="to" type="datetime-local">
+                    </div>
+                </div>
+
+                <!-- Relativní okno: velikost + explicitní jednotka -->
+                <div id="relative-controls" class="time-controls" aria-hidden="false">
+                    <div class="field">
+                        <label for="window-value">Velikost okna</label>
+                        <input id="window-value" name="window_value" type="number" min="1" step="1" value="30" required>
+                    </div>
+                    <div class="field">
+                        <label for="window-unit">Jednotka</label>
+                        <select id="window-unit" name="window_unit">
+                            <option value="second">sekunda</option>
+                            <option value="minute" selected>minuta</option>
+                            <option value="hour">hodina</option>
+                            <option value="day">den</option>
+                        </select>
+                    </div>
+                </div>
+
+                <div class="actions">
+                    <button type="submit">Načíst graf</button>
+                </div>
+            </form>
+
+            <p id="form-message" class="form-message" aria-live="polite">Vyberte zařízení a načtěte data.</p>
+        </section>
+
+        <section class="panel chart-panel">
+            <h2>Graf teploty</h2>
+            <div class="chart-wrap">
+                <canvas id="temperature-chart" aria-label="Graf teploty" role="img"></canvas>
+            </div>
+        </section>
+    </main>
+
+    <!-- Chart.js CDN: renderování probíhá na klientovi (CSR) -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.6/dist/chart.umd.min.js"></script>
+    <script
+        src="{{ url_for('static', filename='dashboard-page.js') }}"
+        data-devices-api="{{ dashboard_devices_api_path }}"
+        data-history-api="{{ dashboard_history_api_path }}"
+    ></script>
+</body>
+</html>

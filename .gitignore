@@ -10,3 +10,5 @@ Desktop/.env
 
 # Optional IDE files
 .vscode/
+Desktop/server.py
+Desktop/telemetry.sqlite3
