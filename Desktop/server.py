@@ -11,6 +11,8 @@ from dotenv import load_dotenv
 from flask import Flask, jsonify, render_template, request
 from paho.mqtt import client as mqtt_client
 
+from sqlite_store import TelemetrySQLiteStore
+
 
 # -----------------------------------------------------------------------------
 # Configuration constants
@@ -40,6 +42,57 @@ def get_required_int_env(name: str) -> int:
         raise RuntimeError(f"Environment variable {name} must be integer, got: {raw_value}") from exc
 
 
+def parse_int(value: Any) -> int | None:
+    """Convert a value to int and return None when conversion is not possible."""
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def parse_float(value: Any) -> float | None:
+    """Convert value to float and return None on parse failure."""
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def parse_iso8601(value: Any) -> str | None:
+    """Validate and normalize ISO-8601 timestamp into UTC text form."""
+    if not isinstance(value, str):
+        return None
+
+    text = value.strip()
+    if not text:
+        return None
+
+    normalized = text.replace("Z", "+00:00")
+    try:
+        dt = datetime.fromisoformat(normalized)
+    except ValueError:
+        return None
+
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    else:
+        dt = dt.astimezone(timezone.utc)
+
+    return dt.isoformat().replace("+00:00", "Z")
+
+
+def parse_device_id_from_topic(topic: str, topic_prefix: str, telemetry_suffix: str) -> str | None:
+    """Extract cvut login/device identifier from topic prefix/login/suffix."""
+    if not topic.startswith(topic_prefix) or not topic.endswith(telemetry_suffix):
+        return None
+
+    middle = topic[len(topic_prefix) : len(topic) - len(telemetry_suffix)]
+    if not middle or "/" in middle:
+        return None
+
+    return middle
+
+
 # Flask server settings.
 FLASK_HOST = os.environ.get("FLASK_HOST", "127.0.0.1")
 FLASK_PORT = int(os.environ.get("FLASK_PORT", "5000"))
@@ -49,11 +102,17 @@ FLASK_DEBUG = os.environ.get("FLASK_DEBUG", "true").lower() == "true"
 MQTT_BROKER_HOST = get_required_env("MQTT_BROKER_HOST")
 MQTT_BROKER_PORT = get_required_int_env("MQTT_BROKER_PORT")
 MQTT_KEEPALIVE_SECONDS = get_required_int_env("MQTT_KEEPALIVE_SECONDS")
-MQTT_TOPIC_FILTER = get_required_env("MQTT_TOPIC_FILTER")
 MQTT_LED_COMMAND_TOPIC = get_required_env("MQTT_LED_COMMAND_TOPIC")
 MQTT_TELEMETRY_TOPIC = get_required_env("MQTT_TELEMETRY_TOPIC")
 MQTT_STATUS_TOPIC = get_required_env("MQTT_STATUS_TOPIC")
 MQTT_PERIOD_COMMAND_TOPIC = get_required_env("MQTT_PERIOD_COMMAND_TOPIC")
+
+MQTT_TOPIC_PREFIX = os.environ.get("MQTT_TOPIC_PREFIX", "cvut/nsi/2026/").strip() or "cvut/nsi/2026/"
+MQTT_TOPIC_TELEMETRY_SUFFIX = (
+    os.environ.get("MQTT_TOPIC_TELEMETRY_SUFFIX", "/telemetry").strip() or "/telemetry"
+)
+DEFAULT_MQTT_TOPIC_FILTER = f"{MQTT_TOPIC_PREFIX}+{MQTT_TOPIC_TELEMETRY_SUFFIX}"
+MQTT_TOPIC_FILTER = os.environ.get("MQTT_TOPIC_FILTER", DEFAULT_MQTT_TOPIC_FILTER).strip() or DEFAULT_MQTT_TOPIC_FILTER
 
 # We intentionally identify test telemetry as a separate producer.
 DESKTOP_TEST_DEVICE_ID = os.environ.get("DESKTOP_TEST_DEVICE_ID", "desktop-telemetry-tester")
@@ -64,15 +123,13 @@ MQTT_DEBUG_LOGGING = os.environ.get("MQTT_DEBUG_LOGGING", "true").lower() == "tr
 DEVICE_OFFLINE_TIMEOUT_SECONDS = int(os.environ.get("DEVICE_OFFLINE_TIMEOUT_SECONDS", "90"))
 
 # API route constants (configurable via environment variables).
-# These default values match the previous hard-coded constants so existing
-# deployments continue to work if env vars are not set.
 ROUTE_DASHBOARD = os.environ.get("ROUTE_DASHBOARD", "/")
 ROUTE_LATEST = os.environ.get("ROUTE_LATEST", "/api/latest")
 ROUTE_LED_COMMAND = os.environ.get("ROUTE_LED_COMMAND", "/api/commands/led")
 ROUTE_TEMPERATURE_TEST = os.environ.get("ROUTE_TEMPERATURE_TEST", "/api/commands/test-temperature")
 ROUTE_UPDATE_TELEMETRY_PERIOD = os.environ.get("ROUTE_UPDATE_TELEMETRY_PERIOD", "/update_telemetry_period")
 
-# Telemetry period limits (seconds) - configurable via env for flexible deploys.
+# Telemetry period limits (seconds).
 TELEMETRY_PERIOD_MIN_SECONDS = int(os.environ.get("TELEMETRY_PERIOD_MIN_SECONDS", "1"))
 TELEMETRY_PERIOD_MAX_SECONDS = int(os.environ.get("TELEMETRY_PERIOD_MAX_SECONDS", "300"))
 
@@ -81,18 +138,24 @@ ALLOWED_LED_COMMANDS = set(
     [c.strip().upper() for c in os.environ.get("ALLOWED_LED_COMMANDS", "ON,OFF,TOGGLE").split(",") if c.strip()]
 )
 
+# SQLite settings.
+SQLITE_DB_PATH_VALUE = os.environ.get("SQLITE_DB_PATH", "telemetry.sqlite3").strip() or "telemetry.sqlite3"
+SQLITE_SCHEMA_PATH_VALUE = os.environ.get("SQLITE_SCHEMA_PATH", "schema.sql").strip() or "schema.sql"
+SQLITE_DB_PATH = Path(SQLITE_DB_PATH_VALUE)
+SQLITE_SCHEMA_PATH = Path(SQLITE_SCHEMA_PATH_VALUE)
+if not SQLITE_DB_PATH.is_absolute():
+    SQLITE_DB_PATH = BASE_DIR / SQLITE_DB_PATH
+if not SQLITE_SCHEMA_PATH.is_absolute():
+    SQLITE_SCHEMA_PATH = BASE_DIR / SQLITE_SCHEMA_PATH
+
 
 # -----------------------------------------------------------------------------
-# In-memory telemetry state (refactored into a class)
+# In-memory telemetry state
 # -----------------------------------------------------------------------------
 
 
 class TelemetryStore:
-    """Thread-safe in-memory telemetry snapshot and helpers.
-
-    This class centralizes storage and all logic that normalizes incoming
-    payloads into the minimal shape the frontend expects.
-    """
+    """Thread-safe in-memory telemetry snapshot and helpers."""
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
@@ -101,49 +164,19 @@ class TelemetryStore:
             "runtime": None,
             "ledstatus": "unknown",
             "temperature": None,
+            "measurement_period_seconds": None,
             "device_status": "UNKNOWN",
             "device_status_updated_at": None,
         }
 
-    @staticmethod
-    def build_measurement_timestamp(value_from_payload: Any) -> str:
-        """
-        Convert payload timestamp to a standardized ISO string.
-
-        Accepted formats:
-        - ISO datetime string (kept as-is)
-        - Unix timestamp in seconds (int/float)
-        - Missing/unknown -> current UTC time
-        """
-        if isinstance(value_from_payload, str) and value_from_payload.strip():
-            return value_from_payload
-
-        if isinstance(value_from_payload, (int, float)):
-            dt = datetime.fromtimestamp(value_from_payload, tz=timezone.utc)
-            return dt.isoformat()
-
-        return datetime.now(tz=timezone.utc).isoformat()
-
     def update_latest_data_from_payload(self, payload_dict: dict[str, Any]) -> None:
         """Normalize MQTT payload fields into a stable frontend shape."""
-        measurement_date = self.build_measurement_timestamp(
-            payload_dict.get("date", payload_dict.get("measurement_datetime", payload_dict.get("timestamp")))
-        )
-        runtime = payload_dict.get(
-            "runtime", payload_dict.get("runtime_seconds", payload_dict.get("device_runtime_seconds"))
-        )
-        led_status = str(
-            payload_dict.get("ledstatus", payload_dict.get("led_status", payload_dict.get("led", "unknown")))
-        )
-        temperature = payload_dict.get(
-            "temperature", payload_dict.get("temperature_celsius", payload_dict.get("temp"))
-        )
-
         with self._lock:
-            self._data["date"] = measurement_date
-            self._data["runtime"] = runtime
-            self._data["ledstatus"] = led_status
-            self._data["temperature"] = temperature
+            self._data["date"] = payload_dict.get("date")
+            self._data["runtime"] = payload_dict.get("runtime")
+            self._data["ledstatus"] = str(payload_dict.get("ledstatus", "unknown"))
+            self._data["temperature"] = payload_dict.get("temperature")
+            self._data["measurement_period_seconds"] = payload_dict.get("period_seconds")
             # Any valid telemetry frame proves the device is reachable now.
             self._data["device_status"] = "ONLINE"
             self._data["device_status_updated_at"] = datetime.now(tz=timezone.utc).isoformat()
@@ -179,7 +212,6 @@ class TelemetryStore:
         if not text:
             return True
 
-        # Accept common ISO values with trailing Z.
         normalized = text.replace("Z", "+00:00")
         try:
             parsed = datetime.fromisoformat(normalized)
@@ -209,14 +241,9 @@ class TelemetryStore:
         return snapshot
 
 
-# Create a single module-level telemetry store for the Flask routes and
-# MQTT callbacks to use. This preserves the original shared-state semantics
-# while keeping the code organized.
 latest_store = TelemetryStore()
+sqlite_store = TelemetrySQLiteStore(SQLITE_DB_PATH, SQLITE_SCHEMA_PATH)
 
-# Create Flask application instance used by route decorators below.
-# Explicitly set template and static folders to the Desktop subfolders so
-# Flask can locate the shipped assets when running from the project root.
 app = Flask(
     __name__,
     template_folder=str(BASE_DIR / "templates"),
@@ -225,7 +252,7 @@ app = Flask(
 
 
 # -----------------------------------------------------------------------------
-# MQTT callbacks and startup (refactored into MQTTManager)
+# MQTT callbacks and startup
 # -----------------------------------------------------------------------------
 
 
@@ -255,7 +282,6 @@ def parse_device_status_payload(raw_payload: str) -> str:
 
 def is_connect_success(reason_code: Any) -> bool:
     """Return True when MQTT connect reason code means success."""
-    # paho-mqtt v2 can provide either int-like reason code or object-like value.
     try:
         return int(reason_code) == 0
     except (TypeError, ValueError):
@@ -268,19 +294,57 @@ def is_connect_success(reason_code: Any) -> bool:
     return str(reason_code).strip().lower() in {"0", "success"}
 
 
+def validate_telemetry_payload(payload_dict: Any) -> tuple[dict[str, Any] | None, str | None]:
+    """Validate mandatory telemetry fields and normalize them for storage."""
+    if not isinstance(payload_dict, dict):
+        return None, "Payload is not a JSON object."
+
+    temperature = parse_float(payload_dict.get("temperature"))
+    if temperature is None:
+        return None, "Missing or invalid required field 'temperature'."
+
+    measurement_ts = parse_iso8601(payload_dict.get("date"))
+    if measurement_ts is None:
+        return None, "Missing or invalid required field 'date' (must be ISO 8601)."
+
+    raw_period = payload_dict.get("period_seconds", payload_dict.get("measurement_period_seconds", payload_dict.get("period")))
+    period_seconds = None
+    if raw_period is not None:
+        parsed_period = parse_int(raw_period)
+        if parsed_period is not None and parsed_period > 0:
+            period_seconds = parsed_period
+
+    runtime = parse_int(payload_dict.get("runtime", payload_dict.get("runtime_seconds")))
+    if runtime is None or runtime < 0:
+        runtime = 0
+
+    led_status = str(payload_dict.get("ledstatus", payload_dict.get("led_status", "unknown")))
+
+    normalized_payload = {
+        "date": measurement_ts,
+        "runtime": runtime,
+        "ledstatus": led_status,
+        "temperature": temperature,
+        "period_seconds": period_seconds,
+    }
+    return normalized_payload, None
+
+
 class MQTTManager:
-    """Encapsulates MQTT subscriber client and its callbacks.
+    """Encapsulates MQTT subscriber client and its callbacks."""
 
-    The manager subscribes to the configured topic filter and status
-    topic on successful connect and delegates payload processing to the
-    shared telemetry store.
-    """
-
-    def __init__(self, store: TelemetryStore) -> None:
+    def __init__(self, store: TelemetryStore, db_store: TelemetrySQLiteStore) -> None:
         self.store = store
-        self.client: mqtt_client.Client | None = None
+        self.db_store = db_store
 
-    def on_connect(self, client: mqtt_client.Client, userdata: Any, flags: Any, reason_code: Any, properties: Any = None) -> None:
+    def on_connect(
+        self,
+        client: mqtt_client.Client,
+        userdata: Any,
+        flags: Any,
+        reason_code: Any,
+        properties: Any = None,
+    ) -> None:
         if MQTT_DEBUG_LOGGING:
             print(f"[MQTT][DEBUG] on_connect reason_code={reason_code} type={type(reason_code).__name__}")
 
@@ -310,143 +374,55 @@ class MQTTManager:
             self.store.update_device_status(parse_device_status_payload(raw_payload))
             return
 
+        device_name = parse_device_id_from_topic(message.topic, MQTT_TOPIC_PREFIX, MQTT_TOPIC_TELEMETRY_SUFFIX)
+        if not device_name:
+            print(f"[MQTT] Invalid telemetry topic format: {message.topic}")
+            return
+
         try:
             payload_dict = json.loads(raw_payload)
-            if isinstance(payload_dict, dict):
-                self.store.update_latest_data_from_payload(payload_dict)
-            else:
-                print("[MQTT] Ignored non-dictionary JSON payload.")
-        except json.JSONDecodeError:
-            print("[MQTT] Ignored invalid JSON payload.")
+        except json.JSONDecodeError as exc:
+            print(f"[MQTT] Invalid JSON payload from {device_name}: {exc}")
+            return
+
+        validated, error_message = validate_telemetry_payload(payload_dict)
+        if error_message:
+            print(f"[MQTT] Dropped telemetry from {device_name}: {error_message}")
+            return
+
+        self.store.update_latest_data_from_payload(validated)
+
+        period_seconds = validated.get("period_seconds")
+        if period_seconds is None:
+            period_seconds = self.db_store.get_last_known_period_seconds(device_name)
+            if period_seconds is None:
+                period_seconds = TELEMETRY_PERIOD_MIN_SECONDS
+            validated["period_seconds"] = period_seconds
+
+        try:
+            self.db_store.save_telemetry_message(
+                device_name=device_name,
+                measured_at_iso8601=str(validated["date"]),
+                temperature_c=float(validated["temperature"]),
+                uptime_seconds=int(validated["runtime"]),
+                measurement_period_seconds=int(validated["period_seconds"]),
+            )
+        except Exception as exc:  # noqa: BLE001
+            print(f"[DB] Failed to persist telemetry for {device_name}: {exc}")
 
     def build_client(self) -> mqtt_client.Client:
         client = mqtt_client.Client(mqtt_client.CallbackAPIVersion.VERSION2)
         client.on_connect = self.on_connect
         client.on_message = self.on_message
-        self.client = client
         return client
 
 
-# Create MQTT manager instance to be used by the startup logic below.
-mqtt_manager = MQTTManager(latest_store)
-
-
-def build_mqtt_subscriber_client() -> mqtt_client.Client:
-    """Factory kept for compatibility; delegates to MQTTManager."""
-    return mqtt_manager.build_client()
-
-
-def build_mqtt_publisher_client() -> mqtt_client.Client:
-    """Create MQTT client used for one-shot publish requests from dashboard."""
-    return mqtt_client.Client(mqtt_client.CallbackAPIVersion.VERSION2)
-
-
-def publish_mqtt_payload(topic: str, payload: str) -> None:
-    """Publish text payload to topic and raise RuntimeError on failure."""
-    publisher = build_mqtt_publisher_client()
-
-    try:
-        publisher.connect(MQTT_BROKER_HOST, MQTT_BROKER_PORT, MQTT_KEEPALIVE_SECONDS)
-        result_info = publisher.publish(topic, payload)
-        result_info.wait_for_publish(timeout=2.0)
-
-        if result_info.rc != mqtt_client.MQTT_ERR_SUCCESS:
-            raise RuntimeError(f"MQTT publish failed with rc={result_info.rc}")
-    finally:
-        publisher.disconnect()
-
-
-def start_mqtt_background_loop() -> None:
-    """Start the MQTT subscriber in a background thread.
-
-    This mirrors the original behavior while using the MQTTManager
-    instance for callback logic.
-    """
-    global mqtt_subscriber_client
-    mqtt_subscriber_client = build_mqtt_subscriber_client()
-
-    try:
-        mqtt_subscriber_client.connect(MQTT_BROKER_HOST, MQTT_BROKER_PORT, MQTT_KEEPALIVE_SECONDS)
-        mqtt_subscriber_client.loop_start()
-        print(f"[MQTT] Trying broker {MQTT_BROKER_HOST}:{MQTT_BROKER_PORT}")
-    except Exception as exc:  # noqa: BLE001
-        print(f"[MQTT] Could not connect: {exc}")
-
-
-# -----------------------------------------------------------------------------
-# MQTT callbacks and startup
-# -----------------------------------------------------------------------------
-
-def is_connect_success(reason_code: Any) -> bool:
-    """Return True when MQTT connect reason code means success."""
-    # paho-mqtt v2 can provide either int-like reason code or object-like value.
-    try:
-        return int(reason_code) == 0
-    except (TypeError, ValueError):
-        pass
-
-    value_attr = getattr(reason_code, "value", None)
-    if isinstance(value_attr, int):
-        return value_attr == 0
-
-    return str(reason_code).strip().lower() in {"0", "success"}
-
-
-def on_mqtt_connect(client: mqtt_client.Client, userdata: Any, flags: Any, reason_code: Any, properties: Any = None) -> None:
-    """Subscribe to MQTT topic filter after successful broker connection."""
-    if MQTT_DEBUG_LOGGING:
-        print(f"[MQTT][DEBUG] on_connect reason_code={reason_code} type={type(reason_code).__name__}")
-
-    if is_connect_success(reason_code):
-        # Subscribe to configured topic filter and status topic.
-        # We subscribe status explicitly so ONLINE/OFFLINE works even if
-        # topic filter is telemetry-only.
-        topic_filter_result = client.subscribe(MQTT_TOPIC_FILTER)
-        status_result = client.subscribe(MQTT_STATUS_TOPIC)
-        if MQTT_DEBUG_LOGGING:
-            print(f"[MQTT][DEBUG] subscribe({MQTT_TOPIC_FILTER}) -> {topic_filter_result}")
-            print(f"[MQTT][DEBUG] subscribe({MQTT_STATUS_TOPIC}) -> {status_result}")
-        print(
-            f"[MQTT] Connected. Subscribed to topic filter: {MQTT_TOPIC_FILTER} "
-            f"and status topic: {MQTT_STATUS_TOPIC}"
-        )
-    else:
-        print(f"[MQTT] Connection failed with reason code: {reason_code}")
-
-
-def on_mqtt_message(client: mqtt_client.Client, userdata: Any, message: mqtt_client.MQTTMessage) -> None:
-    """Parse incoming MQTT JSON payload and update cached latest data."""
-    raw_payload = message.payload.decode("utf-8", errors="replace")
-
-    if MQTT_DEBUG_LOGGING:
-        print(
-            "[MQTT][DEBUG] message "
-            f"topic='{message.topic}' qos={message.qos} retain={message.retain} payload='{raw_payload}'"
-        )
-
-    if message.topic == MQTT_STATUS_TOPIC:
-        latest_store.update_device_status(parse_device_status_payload(raw_payload))
-        return
-
-    try:
-        payload_dict = json.loads(raw_payload)
-        if isinstance(payload_dict, dict):
-            latest_store.update_latest_data_from_payload(payload_dict)
-        else:
-            print("[MQTT] Ignored non-dictionary JSON payload.")
-    except json.JSONDecodeError:
-        print("[MQTT] Ignored invalid JSON payload.")
+mqtt_manager = MQTTManager(latest_store, sqlite_store)
 
 
 def build_mqtt_subscriber_client() -> mqtt_client.Client:
     """Create and configure MQTT client used for telemetry subscription."""
-    # Empty client_id lets broker assign/generated handling when supported,
-    # which is fine because this dashboard has only one data source/device.
-    client = mqtt_client.Client(mqtt_client.CallbackAPIVersion.VERSION2)
-
-    client.on_connect = on_mqtt_connect
-    client.on_message = on_mqtt_message
-    return client
+    return mqtt_manager.build_client()
 
 
 def build_mqtt_publisher_client() -> mqtt_client.Client:
@@ -484,6 +460,13 @@ def start_mqtt_background_loop() -> None:
         print(f"[MQTT] Trying broker {MQTT_BROKER_HOST}:{MQTT_BROKER_PORT}")
     except Exception as exc:  # noqa: BLE001
         print(f"[MQTT] Could not connect: {exc}")
+
+
+def should_start_mqtt_loop() -> bool:
+    """Start MQTT loop only in the effective Flask process."""
+    if not FLASK_DEBUG:
+        return True
+    return os.environ.get("WERKZEUG_RUN_MAIN") == "true"
 
 
 # -----------------------------------------------------------------------------
@@ -537,12 +520,13 @@ def send_led_command() -> Any:
 
 @app.post(ROUTE_TEMPERATURE_TEST)
 def send_temperature_test() -> Any:
-    """Publish simulated telemetry from desktop test device with 100 C value."""
+    """Publish simulated telemetry frame from desktop test device."""
     telemetry_payload = {
-        "date": datetime.now(tz=timezone.utc).isoformat(),
+        "date": datetime.now(tz=timezone.utc).isoformat().replace("+00:00", "Z"),
         "runtime": 0,
         "ledstatus": "unknown",
         "temperature": 100,
+        "period_seconds": 2,
         "device": DESKTOP_TEST_DEVICE_ID,
     }
 
@@ -617,6 +601,8 @@ def update_telemetry_period() -> Any:
 
 if __name__ == "__main__":
     # Start MQTT before Flask so data can begin flowing immediately.
-    start_mqtt_background_loop()
+    if should_start_mqtt_loop():
+        start_mqtt_background_loop()
+    else:
+        print("[MQTT] Skipping subscriber startup in Flask reloader parent process.")
     app.run(host=FLASK_HOST, port=FLASK_PORT, debug=FLASK_DEBUG)
-
