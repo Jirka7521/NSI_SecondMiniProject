@@ -1,0 +1,171 @@
+:root {
+    --page-bg-1: #fff7ed;
+    --page-bg-2: #fde68a;
+    --panel-bg: rgba(255, 255, 255, 0.92);
+    --text-main: #172554;
+    --text-muted: #475569;
+    --accent: #b91c1c;
+    --accent-2: #0f766e;
+    --danger: #b91c1c;
+    --border-soft: rgba(148, 163, 184, 0.5);
+    --shadow-lg: 0 18px 50px rgba(15, 23, 42, 0.16);
+}
+
+* {
+    box-sizing: border-box;
+}
+
+body {
+    margin: 0;
+    min-height: 100vh;
+    color: var(--text-main);
+    font-family: "Trebuchet MS", "Gill Sans", "Segoe UI", sans-serif;
+    background:
+        radial-gradient(circle at 8% 12%, rgba(185, 28, 28, 0.16), transparent 34%),
+        radial-gradient(circle at 92% 18%, rgba(15, 118, 110, 0.2), transparent 30%),
+        linear-gradient(160deg, var(--page-bg-1), var(--page-bg-2));
+}
+
+.dashboard-shell {
+    width: min(1100px, 94vw);
+    margin: 1.5rem auto 2.5rem;
+    display: grid;
+    gap: 1rem;
+}
+
+.hero {
+    padding: 1.1rem 1.2rem;
+    border: 1px solid var(--border-soft);
+    border-radius: 16px;
+    background: var(--panel-bg);
+    box-shadow: var(--shadow-lg);
+}
+
+.hero h1 {
+    margin: 0 0 0.35rem;
+    font-size: clamp(1.4rem, 3.2vw, 2.1rem);
+    letter-spacing: 0.02em;
+}
+
+.hero p {
+    margin: 0;
+    color: var(--text-muted);
+}
+
+.panel {
+    border: 1px solid var(--border-soft);
+    border-radius: 16px;
+    background: var(--panel-bg);
+    box-shadow: var(--shadow-lg);
+    padding: 1rem;
+}
+
+.history-form {
+    display: grid;
+    gap: 0.9rem;
+}
+
+.field {
+    display: grid;
+    gap: 0.35rem;
+}
+
+.field label,
+.field legend {
+    font-weight: 700;
+    color: var(--text-main);
+}
+
+.field input,
+.field select {
+    width: 100%;
+    border: 1px solid #cbd5e1;
+    border-radius: 10px;
+    background: #ffffff;
+    color: #0f172a;
+    padding: 0.56rem 0.62rem;
+    font-size: 0.98rem;
+}
+
+.fieldset-inline {
+    border: 1px dashed #94a3b8;
+    border-radius: 12px;
+    padding: 0.65rem;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.9rem;
+}
+
+.fieldset-inline label {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+}
+
+.time-controls {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+    gap: 0.7rem;
+}
+
+.actions {
+    display: flex;
+    justify-content: flex-start;
+}
+
+.actions button {
+    border: none;
+    border-radius: 10px;
+    background: linear-gradient(135deg, var(--accent), #ef4444);
+    color: #ffffff;
+    font-weight: 700;
+    padding: 0.62rem 1.05rem;
+    cursor: pointer;
+}
+
+.actions button:hover {
+    filter: brightness(1.05);
+}
+
+.form-message {
+    margin: 0.8rem 0 0;
+    color: #0f172a;
+    font-weight: 600;
+}
+
+.form-message.is-error {
+    color: var(--danger);
+}
+
+.hidden {
+    display: none;
+}
+
+.chart-panel h2 {
+    margin: 0 0 0.8rem;
+    color: var(--text-main);
+}
+
+.chart-wrap {
+    position: relative;
+    width: 100%;
+    height: min(62vh, 460px);
+    border: 1px solid rgba(185, 28, 28, 0.24);
+    border-radius: 12px;
+    background: #ffffff;
+    padding: 0.55rem;
+}
+
+@media (max-width: 720px) {
+    .dashboard-shell {
+        margin-top: 1rem;
+    }
+
+    .panel {
+        padding: 0.85rem;
+    }
+
+    .chart-wrap {
+        height: 50vh;
+    }
+}
