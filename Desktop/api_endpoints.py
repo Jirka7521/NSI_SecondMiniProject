@@ -6,6 +6,7 @@ from typing import Any
 from flask import Flask, Response, jsonify, request
 
 from sqlite_store import TelemetrySQLiteStore
+from telemetry_batch_service import TelemetryBatchService
 
 
 class RestApiEndpoints:
@@ -18,6 +19,8 @@ class RestApiEndpoints:
 
     def __init__(self, db_store: TelemetrySQLiteStore) -> None:
         self._db_store = db_store
+        # Keep batch validation/insertion logic separate from route glue code.
+        self._batch_service = TelemetryBatchService(db_store)
 
     def register(self, app: Flask) -> None:
         """Register all REST routes on an existing Flask app instance."""
@@ -32,6 +35,7 @@ class RestApiEndpoints:
         app.add_url_rule("/api/telemetry/<int:measurement_id>", view_func=self.get_telemetry, methods=["GET"])
         app.add_url_rule("/api/telemetry/<int:measurement_id>", view_func=self.delete_telemetry, methods=["DELETE"])
         app.add_url_rule("/api/telemetry", view_func=self.create_telemetry, methods=["POST"])
+        app.add_url_rule("/api/telemetry/batch", view_func=self.create_telemetry_batch, methods=["POST"])
 
     @staticmethod
     def _json_error(message: str, status_code: int) -> tuple[Any, int]:
@@ -292,3 +296,32 @@ class RestApiEndpoints:
             "uptime_source": uptime_source,
         }
         return jsonify(response_body), 201
+
+    def create_telemetry_batch(self) -> tuple[Any, int] | Any:
+        """
+        POST /api/telemetry/batch
+
+        Accepts JSON array containing 1..1000 telemetry records.
+        Batch is inserted in a single transaction, so either every valid row is
+        stored or none are stored.
+        """
+        payload = request.get_json(silent=True)
+
+        try:
+            inserted_count, error = self._batch_service.validate_and_insert_batch(payload)
+        except Exception as exc:
+            # Any unexpected DB/runtime failure should produce a clear 5xx response.
+            return self._json_error(f"Batch insert failed: {exc}", 500)
+
+        if error is not None:
+            return jsonify(error), 400
+
+        return (
+            jsonify(
+                {
+                    "status": "ok",
+                    "inserted_count": inserted_count,
+                }
+            ),
+            201,
+        )

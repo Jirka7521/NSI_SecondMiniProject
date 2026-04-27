@@ -190,6 +190,80 @@ class TelemetrySQLiteStore:
                     (numeric_device_id, temperature_c, measured_at_iso8601),
                 )
 
+    def save_telemetry_batch(self, records: list[dict[str, Any]]) -> None:
+        """
+        Save many telemetry rows inside one SQL transaction.
+
+        Transaction is all-or-nothing by design: if one insert fails, SQLite rolls
+        back the whole batch and no partial data remains persisted.
+        """
+        if not records:
+            return
+
+        with self._lock:
+            with self._get_connection() as connection:
+                # Cache resolved numeric ids so repeated device names in one batch do
+                # not trigger extra SELECTs.
+                resolved_device_ids: dict[str, int] = {}
+
+                for record in records:
+                    device_name = str(record["device_name"])
+                    measured_at_iso8601 = str(record["measured_at_iso8601"])
+                    temperature_c = float(record["temperature_c"])
+                    uptime_seconds = int(record["uptime_seconds"])
+                    measurement_period_seconds = int(record["measurement_period_seconds"])
+
+                    connection.execute(
+                        """
+                        INSERT INTO devices (
+                            device_name,
+                            first_seen_at_iso8601,
+                            last_seen_at_iso8601,
+                            last_uptime_seconds,
+                            measurement_period_seconds,
+                            message_count
+                        )
+                        VALUES (?, ?, ?, ?, ?, 1)
+                        ON CONFLICT(device_name)
+                        DO UPDATE SET
+                            last_seen_at_iso8601 = excluded.last_seen_at_iso8601,
+                            last_uptime_seconds = excluded.last_uptime_seconds,
+                            measurement_period_seconds = excluded.measurement_period_seconds,
+                            message_count = devices.message_count + 1
+                        """,
+                        (
+                            device_name,
+                            measured_at_iso8601,
+                            measured_at_iso8601,
+                            uptime_seconds,
+                            measurement_period_seconds,
+                        ),
+                    )
+
+                    numeric_device_id = resolved_device_ids.get(device_name)
+                    if numeric_device_id is None:
+                        row = connection.execute(
+                            "SELECT id FROM devices WHERE device_name = ?",
+                            (device_name,),
+                        ).fetchone()
+                        if not row:
+                            raise RuntimeError(f"Could not resolve numeric device id for '{device_name}'.")
+
+                        numeric_device_id = int(row[0])
+                        resolved_device_ids[device_name] = numeric_device_id
+
+                    connection.execute(
+                        """
+                        INSERT INTO measurements (
+                            device_id,
+                            temperature_c,
+                            measured_at_iso8601
+                        )
+                        VALUES (?, ?, ?)
+                        """,
+                        (numeric_device_id, temperature_c, measured_at_iso8601),
+                    )
+
     def get_last_known_period_seconds(self, device_name: str) -> int | None:
         """Return the last known period for a device, if present in registry."""
         with self._lock:
